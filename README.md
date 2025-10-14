@@ -210,12 +210,3 @@ Let’s make history together—from the first line of code to rewriting physics
 
 > *“The greatness of science lies not in discovering truth but in creating methods to verify it.”*  
 > — The birth of the collective intelligence network will redefine this method.
-
-### Required Supporting Files
-- `TEMPLATES/issue-template.md`  
-- `WORKFLOWS/research-flow.md`  
-- `.github/ISSUE_TEMPLATE/research-proposal.md`  
-- Discord community setup  
-- Initial seed Issue imports  
-
-This README is not just a technical document but a rallying call to attract top global talent to join the EQT revolution! Would you like me to draft specific template files?
