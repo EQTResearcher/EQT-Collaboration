@@ -1,4 +1,4 @@
-name: EQT Kanban Advanced Automation (Final Runnable Version)
+name: EQT Kanban Advanced Automation (YAML Fixed Version)
 
 on:
   issues:
@@ -30,7 +30,7 @@ jobs:
             console.log(`📥 开始处理：${contentType} #${contentNumber}（状态：${isIssueClosed ? '已关闭' : '活跃'}）`);
 
             try {
-              // 关键：GraphQL字符串无任何内部注释、无多余空格，格式严格对齐
+              // Line 35附近：GraphQL字符串缩进与JavaScript代码对齐（关键修复）
               const projectQuery = `
 query {
   repository(owner: "${context.repo.owner}", name: "${context.repo.repo}") {
