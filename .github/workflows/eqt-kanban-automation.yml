@@ -13,43 +13,35 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Sync labels to status
-        uses: actions/github-script@v7  # Updated to latest version
+        uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}  # Ensure project scope if org-level
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const { issue, project_card: card } = context.payload;  // Handle project_card events too if needed
-            const contentType = issue ? 'Issue' : 'PullRequest';  // For PRs
-            const contentNumber = issue?.number || context.payload.pull_request?.number;
-            if (!contentNumber) return;
-
-            // GraphQL: Query to get project ID by name
-            const { data: projectData } = await github.rest.graphql(
-              `query {
-                repository(owner: "${context.repo.owner}", name: "${context.repo.repo}") {
-                  projectV2(name: "EQT Collective Intelligence Pipeline") {
-                    id
-                  }
-                }
-              }`,
-              { headers: { 'Accept': 'application/vnd.github+json' } }
-            );
-            const projectId = projectData.repository.projectV2?.id;
-            if (!projectId) {
-              console.log('Project not found');
+            const { issue, pull_request: pr } = context.payload;
+            const contentType = issue ? 'Issue' : 'PullRequest';
+            const contentNumber = issue?.number || pr?.number;
+            
+            if (!contentNumber) {
+              console.log('没有找到 issue 或 PR');
               return;
             }
 
-            // GraphQL: Query to get project item ID and current fields
-            const { data: itemData } = await github.rest.graphql(
-              `query($projectId: ID!, $contentId: ID!) {
-                node(id: $projectId) {
-                  ... on ProjectV2 {
-                    items(first: 100, contentId: $contentId) {
-                      nodes {
-                        id
-                        fieldValues(first: 10) {
-                          nodes {
-                            ... on ProjectV2FieldSingleSelectValue {
+            console.log(`处理 ${contentType} #${contentNumber}`);
+
+            try {
+              // 步骤1: 获取项目ID
+              const projectQuery = `
+                query {
+                  repository(owner: "${context.repo.owner}", name: "${context.repo.repo}") {
+                    projectV2(number: 1) {  # 或者使用 name: "项目名称"
+                      id
+                      title
+                      fields(first: 20) {
+                        nodes {
+                          ... on ProjectV2SingleSelectField {
+                            id
+                            name
+                            options {
                               id
                               name
                             }
@@ -59,115 +51,145 @@ jobs:
                     }
                   }
                 }
-              }`,
-              {
-                headers: { 'Accept': 'application/vnd.github+json' },
-                projectId,
-                contentId: `${contentType}:${context.repo.owner}/${context.repo.repo}#${contentNumber}`
+              `;
+              
+              const { repository } = await github.graphql(projectQuery);
+              const projectV2 = repository.projectV2;
+              
+              if (!projectV2) {
+                console.log('未找到项目 "EQT Collective Intelligence Pipeline"');
+                return;
               }
-            );
-            const projectItem = itemData.node.items.nodes[0];
-            if (!projectItem) {
-              console.log('Project item not found');
-              return;
-            }
-            const itemId = projectItem.id;
+              
+              console.log(`找到项目: ${projectV2.title} (ID: ${projectV2.id})`);
 
-            // Label to status mapping (match exact option names from your project field)
-            const labelToStatus = {
-              'exploring': '🔍 论证中 (Exploring)',
-              'reviewing': '🤝 社区评审 (Reviewing)', 
-              'consensus': '✅ 初步共识 (Consensus)',
-              'integration': '🎯 核心整合 (Integration)'
-            };
-
-            // Find matching label and get status
-            let targetStatus = null;
-            for (const [labelKey, statusName] of Object.entries(labelToStatus)) {
-              if ((issue?.labels || []).some(l => l.name.toLowerCase().includes(labelKey))) {
-                targetStatus = statusName;
-                break;
+              // 步骤2: 查找 Status 字段和对应的选项
+              const statusField = projectV2.fields.nodes.find(field => 
+                field.name.toLowerCase().includes('status') || 
+                field.name.includes('状态')
+              );
+              
+              if (!statusField) {
+                console.log('未找到 Status 字段');
+                return;
               }
-            }
-            if (!targetStatus) return;  // No matching label
+              
+              console.log(`找到状态字段: ${statusField.name} (ID: ${statusField.id})`);
 
-            // First, get the Status field ID (assumes field name is exactly "Status")
-            const { data: fieldsData } = await github.rest.graphql(
-              `query($projectId: ID!) {
-                node(id: $projectId) {
-                  ... on ProjectV2 {
-                    fields(first: 20) {
-                      nodes {
-                        ... on ProjectV2SingleSelectField {
+              // 标签到状态的映射（确保与项目中的选项名称完全匹配）
+              const labelToStatus = {
+                'exploring': '🔍 论证中 (Exploring)',
+                'reviewing': '🤝 社区评审 (Reviewing)', 
+                'consensus': '✅ 初步共识 (Consensus)',
+                'integration': '🎯 核心整合 (Integration)'
+              };
+
+              // 查找匹配的标签
+              let targetStatusName = null;
+              const labels = issue?.labels || pr?.labels || [];
+              
+              for (const [labelKey, statusName] of Object.entries(labelToStatus)) {
+                if (labels.some(l => 
+                  l.name.toLowerCase().includes(labelKey)
+                )) {
+                  targetStatusName = statusName;
+                  console.log(`找到匹配标签: ${labelKey} -> ${statusName}`);
+                  break;
+                }
+              }
+              
+              if (!targetStatusName) {
+                console.log('没有找到匹配的状态标签');
+                return;
+              }
+
+              // 查找目标状态选项
+              const targetOption = statusField.options.find(opt => 
+                opt.name === targetStatusName
+              );
+              
+              if (!targetOption) {
+                console.log(`未找到状态选项: ${targetStatusName}`);
+                console.log('可用选项:', statusField.options.map(o => o.name));
+                return;
+              }
+
+              // 步骤3: 获取项目项ID
+              const contentId = `${contentType}:${context.repo.owner}/${context.repo.repo}#${contentNumber}`;
+              console.log(`Content ID: ${contentId}`);
+              
+              const itemQuery = `
+                query($projectId: ID!, $contentId: ID!) {
+                  node(id: $projectId) {
+                    ... on ProjectV2 {
+                      items(first: 10, contentId: $contentId) {
+                        nodes {
                           id
-                          name
+                          content {
+                            ... on Issue {
+                              number
+                              title
+                            }
+                            ... on PullRequest {
+                              number
+                              title
+                            }
+                          }
                         }
                       }
                     }
                   }
                 }
-              }`,
-              {
-                headers: { 'Accept': 'application/vnd.github+json' },
-                projectId
+              `;
+              
+              const { node } = await github.graphql(itemQuery, {
+                projectId: projectV2.id,
+                contentId: contentId
+              });
+              
+              const projectItem = node.items.nodes[0];
+              if (!projectItem) {
+                console.log(`未找到项目项 for ${contentId}`);
+                return;
               }
-            );
-            const statusField = fieldsData.node.fields.nodes.find(f => f.name === 'Status');
-            if (!statusField) {
-              console.log('Status field not found');
-              return;
-            }
-            const fieldId = statusField.id;
+              
+              console.log(`找到项目项: ${projectItem.id}`);
 
-            // Query for the option ID (single-select value ID)
-            const { data: optionData } = await github.rest.graphql(
-              `query($fieldId: ID!) {
-                node(id: $fieldId) {
-                  ... on ProjectV2SingleSelectField {
-                    options(names: ["${targetStatus}"]) {
-                      nodes {
-                        id
+              // 步骤4: 更新状态
+              const updateMutation = `
+                mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $valueId: ID!) {
+                  updateProjectV2SingleSelectField(
+                    projectId: $projectId
+                    itemId: $itemId
+                    fieldId: $fieldId
+                    valueId: $valueId
+                  ) {
+                    projectV2Field {
+                      ... on ProjectV2SingleSelectField {
+                        name
                       }
                     }
                   }
                 }
-              }`,
-              {
-                headers: { 'Accept': 'application/vnd.github+json' },
-                fieldId
-              }
-            );
-            const optionId = optionData.node.options.nodes[0]?.id;
-            if (!optionId) {
-              console.log('Status option not found');
-              return;
-            }
+              `;
+              
+              const { updateProjectV2SingleSelectField } = await github.graphql(updateMutation, {
+                projectId: projectV2.id,
+                itemId: projectItem.id,
+                fieldId: statusField.id,
+                valueId: targetOption.id
+              });
+              
+              console.log(`✅ 成功更新状态为: ${targetStatusName}`);
+              console.log(`项目项 ID: ${projectItem.id}`);
 
-            // GraphQL: Update the project item field
-            await github.rest.graphql(
-              `mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: ID!) {
-                updateProjectV2SingleSelectField(
-                  projectId: $projectId
-                  itemId: $itemId
-                  fieldId: $fieldId
-                  valueId: $optionId
-                ) {
-                  projectV2Field {
-                    ... on ProjectV2SingleSelectField {
-                      name
-                    }
-                  }
-                }
-              }`,
-              {
-                headers: { 'Accept': 'application/vnd.github+json' },
-                projectId,
-                itemId,
-                fieldId,
-                optionId
+            } catch (error) {
+              console.error('❌ 更新失败:', error.message);
+              if (error.errors) {
+                console.error('GraphQL 错误:', JSON.stringify(error.errors, null, 2));
               }
-            );
-            console.log(`Updated status to ${targetStatus} for item ${itemId}`);
+              throw error;
+            }
 
   ai-bot-trigger:
     runs-on: ubuntu-latest
@@ -175,7 +197,9 @@ jobs:
     steps:
       - name: Trigger AI Bot analysis
         run: |
-          echo "新种子议题 #${{ github.event.issue.number }} 需要AI分析"
+          echo "🌱 新种子议题 #${{ github.event.issue.number }} 需要AI分析"
+          echo "议题标题: ${{ github.event.issue.title }}"
           # 这里可以调用你的AI bot API
           # curl -X POST https://your-ai-bot.com/analyze \
+          #   -H "Authorization: Bearer $AI_BOT_TOKEN" \
           #   -d '{"issue": ${{ toJson(github.event.issue) }}}'
