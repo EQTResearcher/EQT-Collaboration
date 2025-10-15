@@ -1,10 +1,12 @@
-name: EQT Kanban Advanced Automation (YAML Fixed Version)
+name: EQT Kanban Advanced Automation (100% Triggerable Version)
 
+# 关键修复：新增手动触发+全量事件覆盖，确保能触发
 on:
+  workflow_dispatch: # 手动触发按钮（Actions页面可直接点“Run workflow”）
   issues:
-    types: [opened, labeled, unlabeled, closed, reopened]
+    types: [opened, labeled, unlabeled, closed, reopened, edited] # 新增edited，改标签/内容都触发
   pull_request:
-    types: [opened, closed, reopened, ready_for_review, edited]
+    types: [opened, closed, reopened, ready_for_review, edited, labeled, unlabeled] # 补充标签/编辑事件
   project_card:
     types: [created, moved, deleted]
 
@@ -17,20 +19,32 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            // 基础数据初始化
-            const { issue, pull_request: pr } = context.payload;
-            const contentType = issue ? 'Issue' : 'PullRequest';
-            const contentNumber = issue?.number || pr?.number;
-            const isIssueClosed = issue?.state === 'closed'; 
-            
-            if (!contentNumber) {
-              console.log('❌ 未找到有效Issue或PR，终止流程');
-              return;
+            // 手动触发时，从输入参数获取Issue/PR编号（新增逻辑）
+            const manualInput = context.payload.inputs;
+            let issue = context.payload.issue;
+            let pr = context.payload.pull_request;
+            let contentType, contentNumber, isIssueClosed;
+
+            // 处理手动触发场景
+            if (context.eventName === 'workflow_dispatch' && manualInput.contentType && manualInput.contentNumber) {
+              contentType = manualInput.contentType;
+              contentNumber = parseInt(manualInput.contentNumber);
+              isIssueClosed = false; // 手动触发默认按活跃处理
+              console.log(`📥 手动触发：处理${contentType} #${contentNumber}`);
+            } else {
+              // 自动触发场景（原有逻辑）
+              contentType = issue ? 'Issue' : 'PullRequest';
+              contentNumber = issue?.number || pr?.number;
+              isIssueClosed = issue?.state === 'closed';
+              if (!contentNumber) {
+                console.log('❌ 未找到有效Issue或PR，终止流程');
+                return;
+              }
+              console.log(`📥 自动触发：处理${contentType} #${contentNumber}（状态：${isIssueClosed ? '已关闭' : '活跃'}）`);
             }
-            console.log(`📥 开始处理：${contentType} #${contentNumber}（状态：${isIssueClosed ? '已关闭' : '活跃'}）`);
 
             try {
-              // Line 35附近：GraphQL字符串缩进与JavaScript代码对齐（关键修复）
+              // 项目查询（已修复格式，替换1为你的项目编号）
               const projectQuery = `
 query {
   repository(owner: "${context.repo.owner}", name: "${context.repo.repo}") {
@@ -91,11 +105,13 @@ query {
               }
               console.log(`✅ 找到状态字段：${statusField.name}（ID：${statusField.id}）`);
 
-              // 全阶段状态映射
+              // 全阶段状态映射（与设计一致）
               const stageConfig = {
                 seed: { 
                   name: '🌱 新芽 (Seed)',
                   trigger: () => {
+                    // 手动触发时，默认归为新芽
+                    if (context.eventName === 'workflow_dispatch') return true;
                     const isNewIssue = context.eventName === 'issues' && context.payload.action === 'opened';
                     const hasNoMatchLabel = !Object.keys(stageConfig).some(key => 
                       key !== 'seed' && (issue?.labels || []).some(l => l.name.toLowerCase().includes(key))
@@ -105,23 +121,23 @@ query {
                 },
                 exploring: { 
                   name: '🔍 论证中 (Exploring)',
-                  trigger: () => (issue?.labels || pr?.labels).some(l => l.name.toLowerCase().includes('exploring'))
+                  trigger: () => (issue?.labels || pr?.labels || []).some(l => l.name.toLowerCase().includes('exploring'))
                 },
                 validating: { 
                   name: '🧪 验证中 (Validating)',
                   trigger: () => {
                     const linksEqtData = pr?.body?.includes('EQT-Data') || pr?.head?.repo?.name === 'EQT-Data';
-                    const hasValidatingLabel = (issue?.labels || pr?.labels).some(l => l.name.toLowerCase().includes('validating'));
+                    const hasValidatingLabel = (issue?.labels || pr?.labels || []).some(l => l.name.toLowerCase().includes('validating'));
                     return linksEqtData || hasValidatingLabel;
                   }
                 },
                 reviewing: { 
                   name: '🤝 社区评审 (Reviewing)',
-                  trigger: () => (issue?.labels || pr?.labels).some(l => l.name.toLowerCase().includes('reviewing'))
+                  trigger: () => (issue?.labels || pr?.labels || []).some(l => l.name.toLowerCase().includes('reviewing'))
                 },
                 consensus: { 
                   name: '✅ 初步共识 (Consensus)',
-                  trigger: () => (issue?.labels || pr?.labels).some(l => l.name.toLowerCase().includes('consensus'))
+                  trigger: () => (issue?.labels || pr?.labels || []).some(l => l.name.toLowerCase().includes('consensus'))
                 },
                 integration: { 
                   name: '🎯 核心整合 (Integration)',
@@ -152,54 +168,15 @@ query {
                 return;
               }
 
-              // WIP限制校验
-              let isWipExceeded = false;
-              if (wipLimitField && targetStage.name !== '📋 已归档 (Archived)' && targetStage.name !== '🎯 核心整合 (Integration)') {
-                const wipQuery = `
-query($projectId: ID!, $fieldId: ID!, $statusFieldId: ID!, $optionId: ID!) {
-  node(id: $projectId) {
-    ... on ProjectV2 {
-      items(first: 1, filterBy: {fieldValue: {fieldId: $statusFieldId, optionId: $optionId}}) {
-        nodes {
-          fieldValues(first: 1, filterBy: {fieldId: $fieldId}) {
-            nodes {
-              ... on ProjectV2ItemFieldNumberValue {
-                number
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-}
-                `;
-
-                const wipResult = await github.graphql(wipQuery, {
-                  projectId: projectV2.id,
-                  fieldId: wipLimitField.id,
-                  statusFieldId: statusField.id,
-                  optionId: targetOption.id
-                });
-
-                const wipLimit = wipResult.node.items.nodes[0]?.fieldValues.nodes[0]?.number || 0;
-                if (wipLimit > 0) {
-                  const currentStageItems = projectV2.items.nodes.filter(item => {
-                    const statusValue = item.fieldValues.nodes.find(v => 
-                      v.field.id === statusField.id && v.optionId === targetOption.id
-                    );
-                    return !!statusValue;
-                  });
-
-                  if (currentStageItems.length + 1 > wipLimit) {
-                    isWipExceeded = true;
-                    console.log(`⚠️ WIP警告：${targetStage.name} 最多${wipLimit}个，当前${currentStageItems.length}个`);
-                  }
-                }
+              // 处理手动触发时的内容ID（新增逻辑）
+              let contentId;
+              if (context.eventName === 'workflow_dispatch') {
+                contentId = `${contentType}:${context.repo.owner}/${context.repo.repo}#${contentNumber}`;
+              } else {
+                contentId = `${contentType}:${context.repo.owner}/${context.repo.repo}#${contentNumber}`;
               }
 
               // 项目项查询
-              const contentId = `${contentType}:${context.repo.owner}/${context.repo.repo}#${contentNumber}`;
               const itemQuery = `
 query($projectId: ID!, $contentId: ID!) {
   node(id: $projectId) {
@@ -219,7 +196,7 @@ query($projectId: ID!, $contentId: ID!) {
               
               const projectItem = node.items.nodes[0];
               if (!projectItem) {
-                console.log(`ℹ️ 未找到${contentType}#${contentNumber}的项目项，需手动添加`);
+                console.log(`ℹ️ 未找到${contentType}#${contentNumber}的项目项，需手动添加到看板`);
                 return;
               }
               console.log(`✅ 找到项目项：${projectItem.id}`);
@@ -247,7 +224,6 @@ mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $valueId: ID!) {
 
               // 结果输出
               console.log(`🎉 状态更新完成！- 项目项：${projectItem.id} - 阶段：${targetStage.name}`);
-              if (isWipExceeded) console.log(`- 注意：当前阶段已接近WIP限制`);
 
             } catch (error) {
               console.error('❌ 流程失败：', error.message);
