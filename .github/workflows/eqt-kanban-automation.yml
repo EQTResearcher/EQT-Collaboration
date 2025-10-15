@@ -5,48 +5,177 @@ on:
     types: [opened, labeled, unlabeled, closed, reopened]
   pull_request:
     types: [opened, closed, reopened, ready_for_review]
-  project_v2_item:  # 更新为 Projects V2 事件，替换 project_card
-    types: [created, edited, deleted]
+  project_card:
+    types: [created, moved, deleted]
 
 jobs:
   sync-status:
     runs-on: ubuntu-latest
     steps:
       - name: Sync labels to status
-        uses: actions/github-script@v7
+        uses: actions/github-script@v7  # Updated to latest version
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}  # 需要 repo 和 projects:write 权限
+          github-token: ${{ secrets.GITHUB_TOKEN }}  # Ensure project scope if org-level
           script: |
-            const { issue } = context.payload;
-            if (!issue) return;  // 只处理 issue 事件
+            const { issue, project_card: card } = context.payload;  // Handle project_card events too if needed
+            const contentType = issue ? 'Issue' : 'PullRequest';  // For PRs
+            const contentNumber = issue?.number || context.payload.pull_request?.number;
+            if (!contentNumber) return;
 
-            // GraphQL 查询：获取项目、字段和项
-            const query = `
-              query GetProjectAndItem($owner: String!, $repo: String!, $issueNumber: Int!) {
-                repository(owner: $owner, name: $repo) {
-                  projectV2(number: 1) {  # 替换为您的项目编号
+            // GraphQL: Query to get project ID by name
+            const { data: projectData } = await github.rest.graphql(
+              `query {
+                repository(owner: "${context.repo.owner}", name: "${context.repo.repo}") {
+                  projectV2(name: "EQT Collective Intelligence Pipeline") {
                     id
+                  }
+                }
+              }`,
+              { headers: { 'Accept': 'application/vnd.github+json' } }
+            );
+            const projectId = projectData.repository.projectV2?.id;
+            if (!projectId) {
+              console.log('Project not found');
+              return;
+            }
+
+            // GraphQL: Query to get project item ID and current fields
+            const { data: itemData } = await github.rest.graphql(
+              `query($projectId: ID!, $contentId: ID!) {
+                node(id: $projectId) {
+                  ... on ProjectV2 {
+                    items(first: 100, contentId: $contentId) {
+                      nodes {
+                        id
+                        fieldValues(first: 10) {
+                          nodes {
+                            ... on ProjectV2FieldSingleSelectValue {
+                              id
+                              name
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }`,
+              {
+                headers: { 'Accept': 'application/vnd.github+json' },
+                projectId,
+                contentId: `${contentType}:${context.repo.owner}/${context.repo.repo}#${contentNumber}`
+              }
+            );
+            const projectItem = itemData.node.items.nodes[0];
+            if (!projectItem) {
+              console.log('Project item not found');
+              return;
+            }
+            const itemId = projectItem.id;
+
+            // Label to status mapping (match exact option names from your project field)
+            const labelToStatus = {
+              'exploring': '🔍 论证中 (Exploring)',
+              'reviewing': '🤝 社区评审 (Reviewing)', 
+              'consensus': '✅ 初步共识 (Consensus)',
+              'integration': '🎯 核心整合 (Integration)'
+            };
+
+            // Find matching label and get status
+            let targetStatus = null;
+            for (const [labelKey, statusName] of Object.entries(labelToStatus)) {
+              if ((issue?.labels || []).some(l => l.name.toLowerCase().includes(labelKey))) {
+                targetStatus = statusName;
+                break;
+              }
+            }
+            if (!targetStatus) return;  // No matching label
+
+            // First, get the Status field ID (assumes field name is exactly "Status")
+            const { data: fieldsData } = await github.rest.graphql(
+              `query($projectId: ID!) {
+                node(id: $projectId) {
+                  ... on ProjectV2 {
                     fields(first: 20) {
                       nodes {
                         ... on ProjectV2SingleSelectField {
                           id
                           name
-                          options {
-                            id
-                            name
-                          }
                         }
                       }
                     }
-                    items(first: 20) {
+                  }
+                }
+              }`,
+              {
+                headers: { 'Accept': 'application/vnd.github+json' },
+                projectId
+              }
+            );
+            const statusField = fieldsData.node.fields.nodes.find(f => f.name === 'Status');
+            if (!statusField) {
+              console.log('Status field not found');
+              return;
+            }
+            const fieldId = statusField.id;
+
+            // Query for the option ID (single-select value ID)
+            const { data: optionData } = await github.rest.graphql(
+              `query($fieldId: ID!) {
+                node(id: $fieldId) {
+                  ... on ProjectV2SingleSelectField {
+                    options(names: ["${targetStatus}"]) {
                       nodes {
                         id
-                        fieldValues(first: 10) {
-                          nodes {
-                            ... on ProjectV2ItemFieldSingleSelectValue {
-                              optionId
-                            }
-                          }
-                        }
-                        content {
-                          ...
+                      }
+                    }
+                  }
+                }
+              }`,
+              {
+                headers: { 'Accept': 'application/vnd.github+json' },
+                fieldId
+              }
+            );
+            const optionId = optionData.node.options.nodes[0]?.id;
+            if (!optionId) {
+              console.log('Status option not found');
+              return;
+            }
+
+            // GraphQL: Update the project item field
+            await github.rest.graphql(
+              `mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: ID!) {
+                updateProjectV2SingleSelectField(
+                  projectId: $projectId
+                  itemId: $itemId
+                  fieldId: $fieldId
+                  valueId: $optionId
+                ) {
+                  projectV2Field {
+                    ... on ProjectV2SingleSelectField {
+                      name
+                    }
+                  }
+                }
+              }`,
+              {
+                headers: { 'Accept': 'application/vnd.github+json' },
+                projectId,
+                itemId,
+                fieldId,
+                optionId
+              }
+            );
+            console.log(`Updated status to ${targetStatus} for item ${itemId}`);
+
+  ai-bot-trigger:
+    runs-on: ubuntu-latest
+    if: contains(github.event.issue.labels.*.name, '🌱 seed')
+    steps:
+      - name: Trigger AI Bot analysis
+        run: |
+          echo "新种子议题 #${{ github.event.issue.number }} 需要AI分析"
+          # 这里可以调用你的AI bot API
+          # curl -X POST https://your-ai-bot.com/analyze \
+          #   -d '{"issue": ${{ toJson(github.event.issue) }}}'
