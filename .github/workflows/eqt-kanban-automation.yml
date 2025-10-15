@@ -1,90 +1,336 @@
-name: EQT Kanban Advanced Automation
+name: EQT Kanban Advanced Automation (Full Version)
 
 on:
   issues:
-    types: [opened, labeled, unlabeled, closed, reopened]
+    types: [opened, labeled, unlabeled, closed, reopened] # 覆盖Issue全生命周期
   pull_request:
-    types: [opened, closed, reopened, ready_for_review]
+    types: [opened, closed, reopened, ready_for_review, edited] # 新增PR编辑触发（检测仓库关联）
   project_card:
     types: [created, moved, deleted]
 
 jobs:
-  sync-status:
+  sync-status-full:
     runs-on: ubuntu-latest
     steps:
-      - name: Sync labels to status
+      - name: Sync labels to status (Full Stage Coverage)
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
+            // ========================= 1. 基础数据初始化 =========================
             const { issue, pull_request: pr } = context.payload;
             const contentType = issue ? 'Issue' : 'PullRequest';
             const contentNumber = issue?.number || pr?.number;
+            const isIssueClosed = issue?.state === 'closed'; // 标记Issue是否已关闭（用于归档）
             
             if (!contentNumber) {
-              console.log('❌ 没有找到 Issue 或 PR');
+              console.log('❌ 未找到有效Issue或PR，终止流程');
               return;
             }
-
-            console.log(`ℹ️ 处理 ${contentType} #${contentNumber}`);
+            console.log(`📥 开始处理：${contentType} #${contentNumber}（状态：${isIssueClosed ? '已关闭' : '活跃'}）`);
 
             try {
-              // 步骤1: 查询组织/仓库的所有项目，找到目标项目
-              const projectSearchQuery = `
+              // ========================= 2. 项目与状态字段查询 =========================
+              // 1. 查询目标项目（EQT Collective Intelligence Pipeline）
+              const projectQuery = `
                 query {
-                  organization(login: "${context.repo.owner}") {
-                    projectV2s(first: 20) {
-                      nodes {
-                        id
-                        title
-                        number
-                        url
-                      }
-                    }
-                  }
                   repository(owner: "${context.repo.owner}", name: "${context.repo.repo}") {
-                    projectV2s(first: 20) {
-                      nodes {
-                        id
-                        title
-                        number
-                        url
+                    projectV2(number: 10) { # 替换为你的项目编号，或用 name: "EQT Collective Intelligence Pipeline"
+                      id
+                      title
+                      fields(first: 30) { # 扩大查询数量，包含自定义字段
+                        nodes {
+                          ... on ProjectV2SingleSelectField {
+                            id
+                            name
+                            options { id, name } # 状态/优先级等单选字段的选项
+                          }
+                          ... on ProjectV2NumberField { # WIP限制字段（需提前在项目中创建）
+                            id
+                            name
+                          }
+                        }
+                      }
+                      items(first: 100) { # 查询所有项目项，用于WIP校验
+                        nodes {
+                          id
+                          fieldValues(first: 10) {
+                            nodes {
+                              ... on ProjectV2ItemFieldSingleSelectValue {
+                                field { id, name }
+                                optionId
+                              }
+                            }
+                          }
+                        }
                       }
                     }
                   }
                 }
               `;
               
-              const { organization, repository } = await github.graphql(projectSearchQuery);
+              const { repository } = await github.graphql(projectQuery);
+              const projectV2 = repository.projectV2;
               
-              // 合并所有项目并查找目标项目（模糊匹配）
-              const allProjects = [
-                ...(organization?.projectV2s?.nodes || []),
-                ...(repository?.projectV2s?.nodes || [])
-              ];
-              
-              const targetProject = allProjects.find(project => 
-                project.title.toLowerCase().includes("eqt collective intelligence pipeline")
-              );
-              
-              if (!targetProject) {
-                console.log('❌ 未找到项目 "EQT Collective Intelligence Pipeline"');
-                console.log('可用项目:');
-                allProjects.forEach(p => {
-                  console.log(`  - ${p.title} (ID: ${p.id}, Number: ${p.number}, URL: ${p.url})`);
-                });
+              if (!projectV2) {
+                console.log('❌ 未找到项目「EQT Collective Intelligence Pipeline」，请检查项目编号/名称');
                 return;
               }
-              
-              console.log(`✅ 找到项目: ${targetProject.title} (ID: ${targetProject.id}, Number: ${targetProject.number})`);
+              console.log(`✅ 找到项目：${projectV2.title}（ID：${projectV2.id}）`);
 
-              // 步骤2: 获取项目字段（特别是 Status 字段）
-              const fieldsQuery = `
-                query($projectId: ID!) {
+              // 2. 提取核心字段（状态字段 + WIP限制字段）
+              const statusField = projectV2.fields.nodes.find(field => 
+                field.name.toLowerCase().includes('status') || field.name.includes('状态')
+              );
+              const wipLimitField = projectV2.fields.nodes.find(field => 
+                field.name.toLowerCase().includes('wip limit') || field.name.includes('wip限制')
+              );
+              
+              if (!statusField) {
+                console.log('❌ 未找到「状态」字段，请在项目中创建单选字段（名称含Status/状态）');
+                return;
+              }
+              console.log(`✅ 找到状态字段：${statusField.name}（ID：${statusField.id}）`);
+
+              // ========================= 3. 全阶段状态映射配置 =========================
+              // 完全匹配设计文件的6个阶段，包含触发条件定义
+              const stageConfig = {
+                seed: { // 🌱 新芽
+                  name: '🌱 新芽 (Seed)',
+                  trigger: () => {
+                    // 触发条件：1. 新Issue 2. 无任何匹配标签 3. 未关闭
+                    const isNewIssue = context.eventName === 'issues' && context.payload.action === 'opened';
+                    const hasNoMatchLabel = !Object.keys(stageConfig).some(key => 
+                      key !== 'seed' && (issue?.labels || []).some(l => l.name.toLowerCase().includes(key))
+                    );
+                    return contentType === 'Issue' && !isIssueClosed && (isNewIssue || hasNoMatchLabel);
+                  }
+                },
+                exploring: { // 🔍 论证中
+                  name: '🔍 论证中 (Exploring)',
+                  trigger: () => (issue?.labels || pr?.labels).some(l => l.name.toLowerCase().includes('exploring'))
+                },
+                validating: { // 🧪 验证中
+                  name: '🧪 验证中 (Validating)',
+                  trigger: () => {
+                    // 触发条件：1. PR关联EQT-Data仓库 2. 标签含validating
+                    const linksEqtData = pr?.body?.includes('EQT-Data') || pr?.head?.repo?.name === 'EQT-Data';
+                    const hasValidatingLabel = (issue?.labels || pr?.labels).some(l => l.name.toLowerCase().includes('validating'));
+                    return linksEqtData || hasValidatingLabel;
+                  }
+                },
+                reviewing: { // 🤝 社区评审
+                  name: '🤝 社区评审 (Reviewing)',
+                  trigger: () => (issue?.labels || pr?.labels).some(l => l.name.toLowerCase().includes('reviewing'))
+                },
+                consensus: { // ✅ 初步共识
+                  name: '✅ 初步共识 (Consensus)',
+                  trigger: () => (issue?.labels || pr?.labels).some(l => l.name.toLowerCase().includes('consensus'))
+                },
+                integration: { // 🎯 核心整合
+                  name: '🎯 核心整合 (Integration)',
+                  trigger: () => pr?.state === 'closed' && pr?.merged === true // PR合并触发
+                },
+                archived: { // 📋 已归档
+                  name: '📋 已归档 (Archived)',
+                  trigger: () => isIssueClosed // Issue关闭触发
+                }
+              };
+
+              // ========================= 4. 匹配目标状态 =========================
+              let targetStage = null;
+              // 遍历所有阶段，找到第一个满足触发条件的阶段
+              Object.values(stageConfig).forEach(stage => {
+                if (!targetStage && stage.trigger()) targetStage = stage;
+              });
+              
+              if (!targetStage) {
+                console.log('ℹ️ 未找到匹配的阶段，保持当前状态');
+                return;
+              }
+              console.log(`🔄 匹配目标阶段：${targetStage.name}`);
+
+              // 验证目标阶段在项目中存在
+              const targetOption = statusField.options.find(opt => opt.name === targetStage.name);
+              if (!targetOption) {
+                console.log(`❌ 项目中无「${targetStage.name}」状态选项`);
+                console.log('可用状态选项：', statusField.options.map(o => o.name).join(', '));
+                return;
+              }
+
+              // ========================= 5. WIP限制校验（新增） =========================
+              let isWipExceeded = false;
+              if (wipLimitField && targetStage.name !== '📋 已归档 (Archived)' && targetStage.name !== '🎯 核心整合 (Integration)') {
+                // 1. 获取目标阶段的WIP限制值（需在项目字段中手动设置，如「🌱 新芽」设为10）
+                const targetStageWipLimit = await github.graphql(`
+                  query($projectId: ID!, $fieldId: ID!, $stageName: String!) {
+                    node(id: $projectId) {
+                      ... on ProjectV2 {
+                        field(name: $stageName) {
+                          ... on ProjectV2SingleSelectField {
+                            id
+                            options(first: 1) {
+                              nodes {
+                                fieldValues(first: 1) {
+                                  nodes {
+                                    ... on ProjectV2ItemFieldNumberValue {
+                                      number
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                `, {
+                  projectId: projectV2.id,
+                  fieldId: wipLimitField.id,
+                  stageName: targetStage.name
+                });
+
+                const wipLimit = targetStageWipLimit.node.field.options.nodes[0]?.fieldValues.nodes[0]?.number || 0;
+                if (wipLimit > 0) {
+                  // 2. 统计当前阶段的卡片数量
+                  const currentStageItems = projectV2.items.nodes.filter(item => {
+                    const statusValue = item.fieldValues.nodes.find(v => 
+                      v.field.id === statusField.id && v.optionId === targetOption.id
+                    );
+                    return !!statusValue;
+                  });
+
+                  // 3. 校验是否超过限制（+1是因为当前卡片即将加入）
+                  if (currentStageItems.length + 1 > wipLimit) {
+                    isWipExceeded = true;
+                    console.log(`⚠️ WIP限制警告：${targetStage.name} 最多${wipLimit}个卡片，当前已${currentStageItems.length}个`);
+                    // 可选：超过WIP时终止更新，或发送通知
+                    // return; 
+                  }
+                }
+              }
+
+              // ========================= 6. 项目项查询与状态更新 =========================
+              // 1. 生成Content ID（GitHub Projects识别Issue/PR的唯一标识）
+              const contentId = `${contentType}:${context.repo.owner}/${context.repo.repo}#${contentNumber}`;
+              
+              // 2. 查询当前内容对应的项目项
+              const itemQuery = `
+                query($projectId: ID!, $contentId: ID!) {
                   node(id: $projectId) {
                     ... on ProjectV2 {
-                      fields(first: 20) {
-                        nodes {
+                      items(first: 1, contentId: $contentId) {
+                        nodes { id }
+                      }
+                    }
+                  }
+                }
+              `;
+              
+              const { node } = await github.graphql(itemQuery, {
+                projectId: projectV2.id,
+                contentId: contentId
+              });
+              
+              const projectItem = node.items.nodes[0];
+              if (!projectItem) {
+                console.log(`ℹ️ 未找到${contentType}#${contentNumber}对应的项目项，需手动添加到看板`);
+                return;
+              }
+              console.log(`✅ 找到项目项：${projectItem.id}`);
+
+              // 3. 执行状态更新
+              const updateMutation = `
+                mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $valueId: ID!) {
+                  updateProjectV2SingleSelectField(
+                    projectId: $projectId
+                    itemId: $itemId
+                    fieldId: $fieldId
+                    valueId: $valueId
+                  ) {
+                    projectV2Item { id }
+                  }
+                }
+              `;
+              
+              await github.graphql(updateMutation, {
+                projectId: projectV2.id,
+                itemId: projectItem.id,
+                fieldId: statusField.id,
+                valueId: targetOption.id
+              });
+
+              // ========================= 7. 执行结果输出 =========================
+              console.log(`🎉 状态更新完成！`);
+              console.log(`- 项目项：${projectItem.id}`);
+              console.log(`- 目标阶段：${targetStage.name}`);
+              if (isWipExceeded) console.log(`- 注意：当前阶段已接近WIP限制，请优先处理存量卡片`);
+
+            } catch (error) {
+              console.error('❌ 自动化流程失败：', error.message);
+              if (error.errors) console.error('📝 GraphQL错误详情：', JSON.stringify(error.errors, null, 2));
+              throw error; // 抛出错误以在GitHub Actions界面显示失败
+            }
+
+  ai-bot-trigger:
+    runs-on: ubuntu-latest
+    if: contains(github.event.issue.labels.*.name, '🌱 seed') # 仅新芽阶段触发AI
+    steps:
+      - name: Trigger EQT AI Bot Analysis
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issue = context.payload.issue;
+            console.log(`🤖 触发AI分析：新芽议题 #${issue.number}《${issue.title}》`);
+
+            // ========================= AI Bot调用逻辑（可根据实际接口调整） =========================
+            try {
+              // 1. 构造AI分析请求参数（包含议题核心元数据）
+              const aiRequestData = {
+                issueId: issue.id,
+                issueNumber: issue.number,
+                title: issue.title,
+                body: issue.body,
+                labels: issue.labels.map(l => l.name),
+                createdBy: issue.user.login,
+                createdAt: issue.created_at
+              };
+
+              // 2. 调用AI Bot API（替换为你的实际接口，需配置秘钥）
+              const aiBotToken = process.env.AI_BOT_TOKEN;
+              if (!aiBotToken) {
+                console.log('⚠️ 未配置AI_BOT_TOKEN，跳过AI调用');
+                return;
+              }
+
+              const response = await fetch('https://your-eqt-ai-bot.com/analyze-seed', { // 替换为实际接口
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${aiBotToken}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(aiRequestData)
+              });
+
+              if (response.ok) {
+                const aiResult = await response.json();
+                console.log(`✅ AI分析请求成功，分析ID：${aiResult.analysisId}`);
+                
+                // 可选：将AI结果评论到Issue
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: `🤖 EQT-AI-Bot 已接收分析请求（ID：${aiResult.analysisId}），结果将在1-2分钟内更新。`
+                });
+              } else {
+                console.error(`❌ AI调用失败：${response.statusText}`);
+              }
+            } catch (aiError) {
+              console.error('❌ AI Bot触发异常：', aiError.message);
+            }                        nodes {
                           ... on ProjectV2SingleSelectField {
                             id
                             name
