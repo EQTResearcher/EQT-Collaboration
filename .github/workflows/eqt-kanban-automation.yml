@@ -22,20 +22,67 @@ jobs:
             const contentNumber = issue?.number || pr?.number;
             
             if (!contentNumber) {
-              console.log('没有找到 issue 或 PR');
+              console.log('❌ 没有找到 Issue 或 PR');
               return;
             }
 
-            console.log(`处理 ${contentType} #${contentNumber}`);
+            console.log(`ℹ️ 处理 ${contentType} #${contentNumber}`);
 
             try {
-              // 步骤1: 获取项目ID
-              const projectQuery = `
+              // 步骤1: 查询组织/仓库的所有项目，找到目标项目
+              const projectSearchQuery = `
                 query {
+                  organization(login: "${context.repo.owner}") {
+                    projectV2s(first: 20) {
+                      nodes {
+                        id
+                        title
+                        number
+                        url
+                      }
+                    }
+                  }
                   repository(owner: "${context.repo.owner}", name: "${context.repo.repo}") {
-                    projectV2(number: 1) {  # 或者使用 name: "项目名称"
-                      id
-                      title
+                    projectV2s(first: 20) {
+                      nodes {
+                        id
+                        title
+                        number
+                        url
+                      }
+                    }
+                  }
+                }
+              `;
+              
+              const { organization, repository } = await github.graphql(projectSearchQuery);
+              
+              // 合并所有项目并查找目标项目（模糊匹配）
+              const allProjects = [
+                ...(organization?.projectV2s?.nodes || []),
+                ...(repository?.projectV2s?.nodes || [])
+              ];
+              
+              const targetProject = allProjects.find(project => 
+                project.title.toLowerCase().includes("eqt collective intelligence pipeline")
+              );
+              
+              if (!targetProject) {
+                console.log('❌ 未找到项目 "EQT Collective Intelligence Pipeline"');
+                console.log('可用项目:');
+                allProjects.forEach(p => {
+                  console.log(`  - ${p.title} (ID: ${p.id}, Number: ${p.number}, URL: ${p.url})`);
+                });
+                return;
+              }
+              
+              console.log(`✅ 找到项目: ${targetProject.title} (ID: ${targetProject.id}, Number: ${targetProject.number})`);
+
+              // 步骤2: 获取项目字段（特别是 Status 字段）
+              const fieldsQuery = `
+                query($projectId: ID!) {
+                  node(id: $projectId) {
+                    ... on ProjectV2 {
                       fields(first: 20) {
                         nodes {
                           ... on ProjectV2SingleSelectField {
@@ -46,6 +93,10 @@ jobs:
                               name
                             }
                           }
+                          ... on ProjectV2FieldCommon {
+                            id
+                            name
+                          }
                         }
                       }
                     }
@@ -53,30 +104,33 @@ jobs:
                 }
               `;
               
-              const { repository } = await github.graphql(projectQuery);
-              const projectV2 = repository.projectV2;
+              const { node: projectNode } = await github.graphql(fieldsQuery, {
+                projectId: targetProject.id
+              });
               
-              if (!projectV2) {
-                console.log('未找到项目 "EQT Collective Intelligence Pipeline"');
-                return;
-              }
-              
-              console.log(`找到项目: ${projectV2.title} (ID: ${projectV2.id})`);
-
-              // 步骤2: 查找 Status 字段和对应的选项
-              const statusField = projectV2.fields.nodes.find(field => 
+              const fields = projectNode.fields.nodes;
+              const statusField = fields.find(field => 
                 field.name.toLowerCase().includes('status') || 
-                field.name.includes('状态')
+                field.name.includes('状态') ||
+                field.name.includes('阶段')
               );
               
-              if (!statusField) {
-                console.log('未找到 Status 字段');
+              if (!statusField || !statusField.options) {
+                console.log('❌ 未找到 Status 单选字段');
+                console.log('可用字段:');
+                fields.forEach(f => {
+                  console.log(`  - ${f.name} (${f.__typename})`);
+                  if (f.options) {
+                    console.log(`    选项: ${f.options.map(o => o.name).join(', ')}`);
+                  }
+                });
                 return;
               }
               
-              console.log(`找到状态字段: ${statusField.name} (ID: ${statusField.id})`);
+              console.log(`✅ 找到状态字段: ${statusField.name} (ID: ${statusField.id})`);
+              console.log(`状态选项: ${statusField.options.map(o => o.name).join(', ')}`);
 
-              // 标签到状态的映射（确保与项目中的选项名称完全匹配）
+              // 标签到状态的映射（确保与项目选项完全匹配）
               const labelToStatus = {
                 'exploring': '🔍 论证中 (Exploring)',
                 'reviewing': '🤝 社区评审 (Reviewing)', 
@@ -84,22 +138,22 @@ jobs:
                 'integration': '🎯 核心整合 (Integration)'
               };
 
+              // 获取当前标签
+              const labels = issue?.labels || pr?.labels || [];
+              console.log(`ℹ️ 当前标签: ${labels.map(l => l.name).join(', ') || '无标签'}`);
+
               // 查找匹配的标签
               let targetStatusName = null;
-              const labels = issue?.labels || pr?.labels || [];
-              
               for (const [labelKey, statusName] of Object.entries(labelToStatus)) {
-                if (labels.some(l => 
-                  l.name.toLowerCase().includes(labelKey)
-                )) {
+                if (labels.some(l => l.name.toLowerCase().includes(labelKey))) {
                   targetStatusName = statusName;
-                  console.log(`找到匹配标签: ${labelKey} -> ${statusName}`);
+                  console.log(`✅ 匹配标签: ${labelKey} -> ${statusName}`);
                   break;
                 }
               }
               
               if (!targetStatusName) {
-                console.log('没有找到匹配的状态标签');
+                console.log('⚠️ 没有找到匹配的状态标签，跳过更新');
                 return;
               }
 
@@ -109,14 +163,16 @@ jobs:
               );
               
               if (!targetOption) {
-                console.log(`未找到状态选项: ${targetStatusName}`);
+                console.log(`❌ 未找到状态选项: ${targetStatusName}`);
                 console.log('可用选项:', statusField.options.map(o => o.name));
                 return;
               }
+              
+              console.log(`✅ 找到目标选项: ${targetOption.name} (ID: ${targetOption.id})`);
 
-              // 步骤3: 获取项目项ID
+              // 步骤3: 检查项目项是否存在，若不存在则添加
               const contentId = `${contentType}:${context.repo.owner}/${context.repo.repo}#${contentNumber}`;
-              console.log(`Content ID: ${contentId}`);
+              console.log(`ℹ️ Content ID: ${contentId}`);
               
               const itemQuery = `
                 query($projectId: ID!, $contentId: ID!) {
@@ -142,52 +198,90 @@ jobs:
                 }
               `;
               
-              const { node } = await github.graphql(itemQuery, {
-                projectId: projectV2.id,
+              const { node: itemNode } = await github.graphql(itemQuery, {
+                projectId: targetProject.id,
                 contentId: contentId
               });
               
-              const projectItem = node.items.nodes[0];
-              if (!projectItem) {
-                console.log(`未找到项目项 for ${contentId}`);
-                return;
-              }
+              let projectItem = itemNode.items.nodes[0];
               
-              console.log(`找到项目项: ${projectItem.id}`);
+              // 如果项目项不存在，自动添加
+              if (!projectItem) {
+                console.log(`⚠️ 未找到项目项 for ${contentId}，尝试添加...`);
+                
+                const addItemMutation = `
+                  mutation($projectId: ID!, $contentId: ID!) {
+                    addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) {
+                      item {
+                        id
+                        content {
+                          ... on Issue {
+                            number
+                            title
+                          }
+                          ... on PullRequest {
+                            number
+                            title
+                          }
+                        }
+                      }
+                    }
+                  }
+                `;
+                
+                const addResult = await github.graphql(addItemMutation, {
+                  projectId: targetProject.id,
+                  contentId: contentId
+                });
+                
+                projectItem = addResult.addProjectV2ItemById.item;
+                console.log(`✅ 成功添加项目项: ${projectItem.id}`);
+              } else {
+                console.log(`✅ 找到项目项: ${projectItem.id} (${projectItem.content.title})`);
+              }
 
               // 步骤4: 更新状态
               const updateMutation = `
                 mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $valueId: ID!) {
-                  updateProjectV2SingleSelectField(
+                  updateProjectV2ItemFieldValue(input: {
                     projectId: $projectId
                     itemId: $itemId
                     fieldId: $fieldId
-                    valueId: $valueId
-                  ) {
-                    projectV2Field {
-                      ... on ProjectV2SingleSelectField {
-                        name
+                    value: { singleSelectOptionId: $valueId }
+                  }) {
+                    projectV2Item {
+                      id
+                      fieldValues(first: 10) {
+                        nodes {
+                          ... on ProjectV2ItemFieldSingleSelectValue {
+                            name
+                          }
+                        }
                       }
                     }
                   }
                 }
               `;
               
-              const { updateProjectV2SingleSelectField } = await github.graphql(updateMutation, {
-                projectId: projectV2.id,
+              const { updateProjectV2ItemFieldValue } = await github.graphql(updateMutation, {
+                projectId: targetProject.id,
                 itemId: projectItem.id,
                 fieldId: statusField.id,
                 valueId: targetOption.id
               });
               
-              console.log(`✅ 成功更新状态为: ${targetStatusName}`);
+              console.log(`🎉 成功更新状态为: ${targetStatusName}`);
               console.log(`项目项 ID: ${projectItem.id}`);
 
             } catch (error) {
-              console.error('❌ 更新失败:', error.message);
+              console.error('❌ 执行失败:', error.message);
               if (error.errors) {
-                console.error('GraphQL 错误:', JSON.stringify(error.errors, null, 2));
+                error.errors.forEach(err => {
+                  console.error(`GraphQL 错误: ${err.message}`);
+                  if (err.path) console.error(`路径: ${err.path.join('.')}`);
+                });
               }
+              console.error('完整错误:', JSON.stringify(error, null, 2));
               throw error;
             }
 
@@ -199,7 +293,7 @@ jobs:
         run: |
           echo "🌱 新种子议题 #${{ github.event.issue.number }} 需要AI分析"
           echo "议题标题: ${{ github.event.issue.title }}"
-          # 这里可以调用你的AI bot API
+          # 替换为你的 AI Bot API 调用
           # curl -X POST https://your-ai-bot.com/analyze \
           #   -H "Authorization: Bearer $AI_BOT_TOKEN" \
           #   -d '{"issue": ${{ toJson(github.event.issue) }}}'
