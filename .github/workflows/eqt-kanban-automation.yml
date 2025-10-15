@@ -1,4 +1,4 @@
-name: EQT Kanban Advanced Automation (Full Fixed Version)
+name: EQT Kanban Advanced Automation (Final Fixed Version)
 
 on:
   issues:
@@ -18,7 +18,7 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            # ========================= 1. 基础数据初始化 =========================
+            // ========================= 1. 基础数据初始化 =========================
             const { issue, pull_request: pr } = context.payload;
             const contentType = issue ? 'Issue' : 'PullRequest';
             const contentNumber = issue?.number || pr?.number;
@@ -31,15 +31,15 @@ jobs:
             console.log(`📥 开始处理：${contentType} #${contentNumber}（状态：${isIssueClosed ? '已关闭' : '活跃'}）`);
 
             try {
-              # ========================= 2. 项目与字段查询（修复GraphQL类型） =========================
+              // ========================= 2. 项目与字段查询（修复GraphQL类型） =========================
               const projectQuery = `
                 query {
                   repository(owner: "${context.repo.owner}", name: "${context.repo.repo}") {
-                    # 替换为你的实际项目编号（如：projectV2(number: 5)）
+                    // 替换为你的实际项目编号（如：projectV2(number: 5)）
                     projectV2(number: 10) { 
                       id
                       title
-                      # 修复：使用正确的字段配置类型（SingleSelect/Number）
+                      // 修复：使用正确的字段配置类型（SingleSelect/Number）
                       fields(first: 30) {
                         nodes {
                           ... on ProjectV2SingleSelectFieldConfiguration {
@@ -53,7 +53,7 @@ jobs:
                           }
                         }
                       }
-                      # 修复：仅查询状态字段值，避免联合体错误
+                      // 修复：仅查询状态字段值，避免联合体错误
                       items(first: 100) {
                         nodes {
                           id
@@ -81,7 +81,7 @@ jobs:
               }
               console.log(`✅ 找到项目：${projectV2.title}（ID：${projectV2.id}）`);
 
-              # 提取核心字段（状态字段+WIP限制字段）
+              // 提取核心字段（状态字段+WIP限制字段）
               const statusField = projectV2.fields.nodes.find(field => 
                 field.name.toLowerCase().includes('status') || field.name.includes('状态')
               );
@@ -95,9 +95,9 @@ jobs:
               }
               console.log(`✅ 找到状态字段：${statusField.name}（ID：${statusField.id}）`);
 
-              # ========================= 3. 全阶段状态映射（匹配设计文件） =========================
+              // ========================= 3. 全阶段状态映射（匹配设计文件） =========================
               const stageConfig = {
-                seed: { # 🌱 新芽
+                seed: { // 🌱 新芽
                   name: '🌱 新芽 (Seed)',
                   trigger: () => {
                     const isNewIssue = context.eventName === 'issues' && context.payload.action === 'opened';
@@ -107,11 +107,11 @@ jobs:
                     return contentType === 'Issue' && !isIssueClosed && (isNewIssue || hasNoMatchLabel);
                   }
                 },
-                exploring: { # 🔍 论证中
+                exploring: { // 🔍 论证中
                   name: '🔍 论证中 (Exploring)',
                   trigger: () => (issue?.labels || pr?.labels).some(l => l.name.toLowerCase().includes('exploring'))
                 },
-                validating: { # 🧪 验证中
+                validating: { // 🧪 验证中
                   name: '🧪 验证中 (Validating)',
                   trigger: () => {
                     const linksEqtData = pr?.body?.includes('EQT-Data') || pr?.head?.repo?.name === 'EQT-Data';
@@ -119,25 +119,25 @@ jobs:
                     return linksEqtData || hasValidatingLabel;
                   }
                 },
-                reviewing: { # 🤝 社区评审
+                reviewing: { // 🤝 社区评审
                   name: '🤝 社区评审 (Reviewing)',
                   trigger: () => (issue?.labels || pr?.labels).some(l => l.name.toLowerCase().includes('reviewing'))
                 },
-                consensus: { # ✅ 初步共识
+                consensus: { // ✅ 初步共识
                   name: '✅ 初步共识 (Consensus)',
                   trigger: () => (issue?.labels || pr?.labels).some(l => l.name.toLowerCase().includes('consensus'))
                 },
-                integration: { # 🎯 核心整合
+                integration: { // 🎯 核心整合
                   name: '🎯 核心整合 (Integration)',
                   trigger: () => pr?.state === 'closed' && pr?.merged === true
                 },
-                archived: { # 📋 已归档
+                archived: { // 📋 已归档
                   name: '📋 已归档 (Archived)',
                   trigger: () => isIssueClosed
                 }
               };
 
-              # ========================= 4. 匹配目标阶段 =========================
+              // ========================= 4. 匹配目标阶段 =========================
               let targetStage = null;
               Object.values(stageConfig).forEach(stage => {
                 if (!targetStage && stage.trigger()) targetStage = stage;
@@ -149,7 +149,7 @@ jobs:
               }
               console.log(`🔄 匹配目标阶段：${targetStage.name}`);
 
-              # 验证阶段在项目中存在
+              // 验证阶段在项目中存在
               const targetOption = statusField.options.find(opt => opt.name === targetStage.name);
               if (!targetOption) {
                 console.log(`❌ 项目中无「${targetStage.name}」状态选项`);
@@ -157,10 +157,10 @@ jobs:
                 return;
               }
 
-              # ========================= 5. WIP限制校验（修复查询逻辑） =========================
+              // ========================= 5. WIP限制校验（修复查询逻辑） =========================
               let isWipExceeded = false;
               if (wipLimitField && targetStage.name !== '📋 已归档 (Archived)' && targetStage.name !== '🎯 核心整合 (Integration)') {
-                # 精准查询目标阶段的WIP限制值
+                // 精准查询目标阶段的WIP限制值
                 const wipQuery = `
                   query($projectId: ID!, $fieldId: ID!, $statusFieldId: ID!, $optionId: ID!) {
                     node(id: $projectId) {
@@ -190,7 +190,7 @@ jobs:
 
                 const wipLimit = wipResult.node.items.nodes[0]?.fieldValues.nodes[0]?.number || 0;
                 if (wipLimit > 0) {
-                  # 统计当前阶段卡片数量
+                  // 统计当前阶段卡片数量
                   const currentStageItems = projectV2.items.nodes.filter(item => {
                     const statusValue = item.fieldValues.nodes.find(v => 
                       v.field.id === statusField.id && v.optionId === targetOption.id
@@ -205,7 +205,7 @@ jobs:
                 }
               }
 
-              # ========================= 6. 项目项查询与状态更新 =========================
+              // ========================= 6. 项目项查询与状态更新 =========================
               const contentId = `${contentType}:${context.repo.owner}/${context.repo.repo}#${contentNumber}`;
               const itemQuery = `
                 query($projectId: ID!, $contentId: ID!) {
@@ -231,7 +231,7 @@ jobs:
               }
               console.log(`✅ 找到项目项：${projectItem.id}`);
 
-              # 执行状态更新
+              // 执行状态更新
               const updateMutation = `
                 mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $valueId: ID!) {
                   updateProjectV2SingleSelectField(
@@ -252,7 +252,7 @@ jobs:
                 valueId: targetOption.id
               });
 
-              # ========================= 7. 结果输出 =========================
+              // ========================= 7. 结果输出 =========================
               console.log(`🎉 状态更新完成！`);
               console.log(`- 项目项：${projectItem.id}`);
               console.log(`- 目标阶段：${targetStage.name}`);
@@ -263,4 +263,3 @@ jobs:
               if (error.errors) console.error('📝 GraphQL错误详情：', JSON.stringify(error.errors, null, 2));
               throw error;
             }
-
