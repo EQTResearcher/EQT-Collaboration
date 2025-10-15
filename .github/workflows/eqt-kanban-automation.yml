@@ -58,7 +58,7 @@ jobs:
             }
 
             try {
-              // ✅ 修正GraphQL语法：使用完整的字段名
+              // ✅ 核心修复：使用GitHub API官方类型名（移除Configuration后缀）
               const projectQuery = `query {
                 repository(owner: "EQTResearcher", name: "EQT-Collaboration") {
                   projectV2(number: 10) {
@@ -66,7 +66,8 @@ jobs:
                     title
                     fields(first: 30) {
                       nodes {
-                        ... on ProjectV2SingleSelectFieldConfiguration {
+                        # 正确类型名：ProjectV2SingleSelectField（无Configuration）
+                        ... on ProjectV2SingleSelectField {
                           id
                           name
                           options {
@@ -74,11 +75,13 @@ jobs:
                             name
                           }
                         }
-                        ... on ProjectV2NumberFieldConfiguration {
+                        # 正确类型名：ProjectV2NumberField（无Configuration）
+                        ... on ProjectV2NumberField {
                           id
                           name
                         }
-                        ... on ProjectV2FieldCommon {
+                        # 正确类型名：ProjectV2Field（无Common）
+                        ... on ProjectV2Field {
                           id
                           name
                           dataType
@@ -90,6 +93,7 @@ jobs:
                         id
                         fieldValues(first: 10) {
                           nodes {
+                            # 字段值类型名无需修改（保持原样）
                             ... on ProjectV2ItemFieldSingleSelectValue {
                               field {
                                 id
