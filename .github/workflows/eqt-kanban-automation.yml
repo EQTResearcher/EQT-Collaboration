@@ -530,16 +530,3 @@ jobs:
               console.error('完整错误:', JSON.stringify(error, null, 2));
               throw error;
             }
-
-  ai-bot-trigger:
-    runs-on: ubuntu-latest
-    if: contains(github.event.issue.labels.*.name, '🌱 seed')
-    steps:
-      - name: Trigger AI Bot analysis
-        run: |
-          echo "🌱 新种子议题 #${{ github.event.issue.number }} 需要AI分析"
-          echo "议题标题: ${{ github.event.issue.title }}"
-          # 替换为你的 AI Bot API 调用
-          # curl -X POST https://your-ai-bot.com/analyze \
-          #   -H "Authorization: Bearer $AI_BOT_TOKEN" \
-          #   -d '{"issue": ${{ toJson(github.event.issue) }}}'
