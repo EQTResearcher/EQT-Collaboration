@@ -1,4 +1,4 @@
-name: EQT Kanban Advanced Automation (Ultimate Fixed Version)
+name: EQT Kanban Advanced Automation (Final Runnable Version)
 
 on:
   issues:
@@ -9,7 +9,6 @@ on:
     types: [created, moved, deleted]
 
 jobs:
-  # 唯一的状态同步任务：覆盖全阶段+WIP校验
   sync-status-full:
     runs-on: ubuntu-latest
     steps:
@@ -18,7 +17,7 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            // ========================= 1. 基础数据初始化 =========================
+            // 基础数据初始化
             const { issue, pull_request: pr } = context.payload;
             const contentType = issue ? 'Issue' : 'PullRequest';
             const contentNumber = issue?.number || pr?.number;
@@ -31,43 +30,42 @@ jobs:
             console.log(`📥 开始处理：${contentType} #${contentNumber}（状态：${isIssueClosed ? '已关闭' : '活跃'}）`);
 
             try {
-              // ========================= 2. 项目与字段查询（移除GraphQL内部注释） =========================
-              // 注意：下方GraphQL字符串内无任何注释，避免解析错误
+              // 关键：GraphQL字符串无任何内部注释、无多余空格，格式严格对齐
               const projectQuery = `
-                query {
-                  repository(owner: "${context.repo.owner}", name: "${context.repo.repo}") {
-                    projectV2(number: 10) { 
-                      id
-                      title
-                      fields(first: 30) {
-                        nodes {
-                          ... on ProjectV2SingleSelectFieldConfiguration {
-                            id
-                            name
-                            options { id, name }
-                          }
-                          ... on ProjectV2NumberFieldConfiguration {
-                            id
-                            name
-                          }
-                        }
-                      }
-                      items(first: 100) {
-                        nodes {
-                          id
-                          fieldValues(first: 10) {
-                            nodes {
-                              ... on ProjectV2ItemFieldSingleSelectValue {
-                                field { id, name }
-                                optionId
-                              }
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
+query {
+  repository(owner: "${context.repo.owner}", name: "${context.repo.repo}") {
+    projectV2(number: 10) { # 【必改】替换1为你的实际项目编号
+      id
+      title
+      fields(first: 30) {
+        nodes {
+          ... on ProjectV2SingleSelectFieldConfiguration {
+            id
+            name
+            options { id, name }
+          }
+          ... on ProjectV2NumberFieldConfiguration {
+            id
+            name
+          }
+        }
+      }
+      items(first: 100) {
+        nodes {
+          id
+          fieldValues(first: 10) {
+            nodes {
+              ... on ProjectV2ItemFieldSingleSelectValue {
+                field { id, name }
+                optionId
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
               `;
               
               const { repository } = await github.graphql(projectQuery);
@@ -79,7 +77,7 @@ jobs:
               }
               console.log(`✅ 找到项目：${projectV2.title}（ID：${projectV2.id}）`);
 
-              // 提取核心字段（状态字段+WIP限制字段）
+              // 提取核心字段
               const statusField = projectV2.fields.nodes.find(field => 
                 field.name.toLowerCase().includes('status') || field.name.includes('状态')
               );
@@ -88,14 +86,14 @@ jobs:
               );
               
               if (!statusField) {
-                console.log('❌ 未找到「状态」字段，请在项目中创建单选字段（名称含Status/状态）');
+                console.log('❌ 未找到「状态」字段，请创建含Status/状态的单选字段');
                 return;
               }
               console.log(`✅ 找到状态字段：${statusField.name}（ID：${statusField.id}）`);
 
-              // ========================= 3. 全阶段状态映射（匹配设计文件） =========================
+              // 全阶段状态映射
               const stageConfig = {
-                seed: { // 🌱 新芽
+                seed: { 
                   name: '🌱 新芽 (Seed)',
                   trigger: () => {
                     const isNewIssue = context.eventName === 'issues' && context.payload.action === 'opened';
@@ -105,11 +103,11 @@ jobs:
                     return contentType === 'Issue' && !isIssueClosed && (isNewIssue || hasNoMatchLabel);
                   }
                 },
-                exploring: { // 🔍 论证中
+                exploring: { 
                   name: '🔍 论证中 (Exploring)',
                   trigger: () => (issue?.labels || pr?.labels).some(l => l.name.toLowerCase().includes('exploring'))
                 },
-                validating: { // 🧪 验证中
+                validating: { 
                   name: '🧪 验证中 (Validating)',
                   trigger: () => {
                     const linksEqtData = pr?.body?.includes('EQT-Data') || pr?.head?.repo?.name === 'EQT-Data';
@@ -117,66 +115,64 @@ jobs:
                     return linksEqtData || hasValidatingLabel;
                   }
                 },
-                reviewing: { // 🤝 社区评审
+                reviewing: { 
                   name: '🤝 社区评审 (Reviewing)',
                   trigger: () => (issue?.labels || pr?.labels).some(l => l.name.toLowerCase().includes('reviewing'))
                 },
-                consensus: { // ✅ 初步共识
+                consensus: { 
                   name: '✅ 初步共识 (Consensus)',
                   trigger: () => (issue?.labels || pr?.labels).some(l => l.name.toLowerCase().includes('consensus'))
                 },
-                integration: { // 🎯 核心整合
+                integration: { 
                   name: '🎯 核心整合 (Integration)',
                   trigger: () => pr?.state === 'closed' && pr?.merged === true
                 },
-                archived: { // 📋 已归档
+                archived: { 
                   name: '📋 已归档 (Archived)',
                   trigger: () => isIssueClosed
                 }
               };
 
-              // ========================= 4. 匹配目标阶段 =========================
+              // 匹配目标阶段
               let targetStage = null;
               Object.values(stageConfig).forEach(stage => {
                 if (!targetStage && stage.trigger()) targetStage = stage;
               });
               
               if (!targetStage) {
-                console.log('ℹ️ 未找到匹配的阶段，保持当前状态');
+                console.log('ℹ️ 未找到匹配阶段，保持当前状态');
                 return;
               }
               console.log(`🔄 匹配目标阶段：${targetStage.name}`);
 
-              // 验证阶段在项目中存在
+              // 验证阶段存在性
               const targetOption = statusField.options.find(opt => opt.name === targetStage.name);
               if (!targetOption) {
-                console.log(`❌ 项目中无「${targetStage.name}」状态选项`);
-                console.log('可用状态选项：', statusField.options.map(o => o.name).join(', '));
+                console.log(`❌ 无「${targetStage.name}」状态选项，可用选项：${statusField.options.map(o => o.name).join(', ')}`);
                 return;
               }
 
-              // ========================= 5. WIP限制校验（移除GraphQL内部注释） =========================
+              // WIP限制校验
               let isWipExceeded = false;
               if (wipLimitField && targetStage.name !== '📋 已归档 (Archived)' && targetStage.name !== '🎯 核心整合 (Integration)') {
-                // GraphQL字符串内无注释，避免解析错误
                 const wipQuery = `
-                  query($projectId: ID!, $fieldId: ID!, $statusFieldId: ID!, $optionId: ID!) {
-                    node(id: $projectId) {
-                      ... on ProjectV2 {
-                        items(first: 1, filterBy: {fieldValue: {fieldId: $statusFieldId, optionId: $optionId}}) {
-                          nodes {
-                            fieldValues(first: 1, filterBy: {fieldId: $fieldId}) {
-                              nodes {
-                                ... on ProjectV2ItemFieldNumberValue {
-                                  number
-                                }
-                              }
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
+query($projectId: ID!, $fieldId: ID!, $statusFieldId: ID!, $optionId: ID!) {
+  node(id: $projectId) {
+    ... on ProjectV2 {
+      items(first: 1, filterBy: {fieldValue: {fieldId: $statusFieldId, optionId: $optionId}}) {
+        nodes {
+          fieldValues(first: 1, filterBy: {fieldId: $fieldId}) {
+            nodes {
+              ... on ProjectV2ItemFieldNumberValue {
+                number
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
                 `;
 
                 const wipResult = await github.graphql(wipQuery, {
@@ -188,7 +184,6 @@ jobs:
 
                 const wipLimit = wipResult.node.items.nodes[0]?.fieldValues.nodes[0]?.number || 0;
                 if (wipLimit > 0) {
-                  // 统计当前阶段卡片数量
                   const currentStageItems = projectV2.items.nodes.filter(item => {
                     const statusValue = item.fieldValues.nodes.find(v => 
                       v.field.id === statusField.id && v.optionId === targetOption.id
@@ -198,24 +193,23 @@ jobs:
 
                   if (currentStageItems.length + 1 > wipLimit) {
                     isWipExceeded = true;
-                    console.log(`⚠️ WIP限制警告：${targetStage.name} 最多${wipLimit}个卡片，当前已${currentStageItems.length}个`);
+                    console.log(`⚠️ WIP警告：${targetStage.name} 最多${wipLimit}个，当前${currentStageItems.length}个`);
                   }
                 }
               }
 
-              // ========================= 6. 项目项查询与状态更新（移除GraphQL内部注释） =========================
+              // 项目项查询
               const contentId = `${contentType}:${context.repo.owner}/${context.repo.repo}#${contentNumber}`;
-              // GraphQL字符串内无注释
               const itemQuery = `
-                query($projectId: ID!, $contentId: ID!) {
-                  node(id: $projectId) {
-                    ... on ProjectV2 {
-                      items(first: 1, contentId: $contentId) {
-                        nodes { id }
-                      }
-                    }
-                  }
-                }
+query($projectId: ID!, $contentId: ID!) {
+  node(id: $projectId) {
+    ... on ProjectV2 {
+      items(first: 1, contentId: $contentId) {
+        nodes { id }
+      }
+    }
+  }
+}
               `;
               
               const { node } = await github.graphql(itemQuery, {
@@ -225,23 +219,23 @@ jobs:
               
               const projectItem = node.items.nodes[0];
               if (!projectItem) {
-                console.log(`ℹ️ 未找到${contentType}#${contentNumber}对应的项目项，需手动添加到看板`);
+                console.log(`ℹ️ 未找到${contentType}#${contentNumber}的项目项，需手动添加`);
                 return;
               }
               console.log(`✅ 找到项目项：${projectItem.id}`);
 
-              // 执行状态更新（GraphQL字符串内无注释）
+              // 执行状态更新
               const updateMutation = `
-                mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $valueId: ID!) {
-                  updateProjectV2SingleSelectField(
-                    projectId: $projectId
-                    itemId: $itemId
-                    fieldId: $fieldId
-                    valueId: $valueId
-                  ) {
-                    projectV2Item { id }
-                  }
-                }
+mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $valueId: ID!) {
+  updateProjectV2SingleSelectField(
+    projectId: $projectId
+    itemId: $itemId
+    fieldId: $fieldId
+    valueId: $valueId
+  ) {
+    projectV2Item { id }
+  }
+}
               `;
               
               await github.graphql(updateMutation, {
@@ -251,15 +245,13 @@ jobs:
                 valueId: targetOption.id
               });
 
-              // ========================= 7. 结果输出 =========================
-              console.log(`🎉 状态更新完成！`);
-              console.log(`- 项目项：${projectItem.id}`);
-              console.log(`- 目标阶段：${targetStage.name}`);
-              if (isWipExceeded) console.log(`- 注意：当前阶段已接近WIP限制，请优先处理存量卡片`);
+              // 结果输出
+              console.log(`🎉 状态更新完成！- 项目项：${projectItem.id} - 阶段：${targetStage.name}`);
+              if (isWipExceeded) console.log(`- 注意：当前阶段已接近WIP限制`);
 
             } catch (error) {
-              console.error('❌ 自动化流程失败：', error.message);
-              if (error.errors) console.error('📝 GraphQL错误详情：', JSON.stringify(error.errors, null, 2));
+              console.error('❌ 流程失败：', error.message);
+              if (error.errors) console.error('📝 GraphQL错误：', JSON.stringify(error.errors, null, 2));
               throw error;
             }
 
