@@ -1,40 +1,72 @@
-name: EQT Kanban Automation
-
-on:
-  issues:
-    types: [opened, labeled, closed]
-  pull_request:
-    types: [opened, closed, edited]
-  issue_comment:
-    types: [created]
-
-jobs:
-  update_status_based_on_labels:
-    runs-on: ubuntu-latest
-    if: github.event.issue || github.event.pull_request
-    steps:
-      # 此步骤需要借助第三方Action或更复杂的脚本实现精确的项目卡状态更新
-      # 以下是逻辑描述，实际实现可能需要使用 `actions/github-script` 等
-      - name: Update project card status
-        env:
-          LABEL_ADDED: ${{ github.event.label.name }}
-        run: |
-          # 逻辑：当特定标签被添加时，将对应的项目卡移动到相应状态列
-          # 例如：如果添加了 "🔍 exploring" 标签，则将卡片状态设置为 "🔍 论证中 (Exploring)"
-          # 由于直接操作Projects API较复杂，建议使用预构建的Action或详细脚本
-        # 请注意：上述run块内的逻辑为示例，需要具体代码实现
-
-  notify_on_new_seed:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'issues' && github.event.action == 'opened'
-    steps:
-      - name: Comment on new seed issue
-        uses: actions/github-script@v7
-        with:
-          script: |
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: '欢迎新的研究议题！@EQT-AI-Bot，请执行一致性检查。'
-            })
+   name: EQT Kanban Advanced Automation
+   
+   on:
+     issues:
+       types: [opened, labeled, unlabeled, closed, reopened]
+     pull_request:
+       types: [opened, closed, reopened, ready_for_review]
+     project_card:
+       types: [created, moved, deleted]
+   
+   jobs:
+     sync-status:
+       runs-on: ubuntu-latest
+       steps:
+         - name: Sync labels to status
+           uses: actions/github-script@v6
+           with:
+             script: |
+               const { issue, project } = context.payload;
+               
+               // 获取项目ID
+               const projects = await github.rest.projects.listForRepo({
+                 owner: context.repo.owner,
+                 repo: context.repo.repo,
+               });
+               
+               const targetProject = projects.data.find(p => p.name === "EQT Collective Intelligence Pipeline");
+               if (!targetProject) return;
+               
+               // 标签到状态的映射
+               const labelToStatus = {
+                 'exploring': '🔍 论证中 (Exploring)',
+                 'reviewing': '🤝 社区评审 (Reviewing)', 
+                 'consensus': '✅ 初步共识 (Consensus)',
+                 'integration': '🎯 核心整合 (Integration)'
+               };
+               
+               // 更新项目项状态
+               if (issue) {
+                 const projectItems = await github.rest.projects.listCards({
+                   project_id: targetProject.id,
+                   archived_state: 'not_archived'
+                 });
+                 
+                 const item = projectItems.data.find(card => 
+                   card.content_url && card.content_url.includes(`/issues/${issue.number}`)
+                 );
+                 
+                 if (item) {
+                   for (const [label, status] of Object.entries(labelToStatus)) {
+                     if (issue.labels.some(l => l.name.toLowerCase().includes(label))) {
+                       await github.rest.projects.updateCard({
+                         card_id: item.id,
+                         archived: false,
+                         // 这里需要根据实际API调整状态更新逻辑
+                       });
+                       break;
+                     }
+                   }
+                 }
+               }
+   
+     ai-bot-trigger:
+       runs-on: ubuntu-latest
+       if: contains(github.event.issue.labels.*.name, '🌱 seed')
+       steps:
+         - name: Trigger AI Bot analysis
+           run: |
+             echo "新种子议题 #${{ github.event.issue.number }} 需要AI分析"
+             # 这里可以调用你的AI bot API
+             # curl -X POST https://your-ai-bot.com/analyze \
+             #   -d '{"issue": ${{ toJson(github.event.issue) }}}'
