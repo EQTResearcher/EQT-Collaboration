@@ -1,4 +1,4 @@
-name: EQT Kanban Advanced Automation (Final Fixed Version)
+name: EQT Kanban Advanced Automation (Ultimate Fixed Version)
 
 on:
   issues:
@@ -31,15 +31,14 @@ jobs:
             console.log(`📥 开始处理：${contentType} #${contentNumber}（状态：${isIssueClosed ? '已关闭' : '活跃'}）`);
 
             try {
-              // ========================= 2. 项目与字段查询（修复GraphQL类型） =========================
+              // ========================= 2. 项目与字段查询（移除GraphQL内部注释） =========================
+              // 注意：下方GraphQL字符串内无任何注释，避免解析错误
               const projectQuery = `
                 query {
                   repository(owner: "${context.repo.owner}", name: "${context.repo.repo}") {
-                    // 替换为你的实际项目编号（如：projectV2(number: 5)）
                     projectV2(number: 10) { 
                       id
                       title
-                      // 修复：使用正确的字段配置类型（SingleSelect/Number）
                       fields(first: 30) {
                         nodes {
                           ... on ProjectV2SingleSelectFieldConfiguration {
@@ -53,7 +52,6 @@ jobs:
                           }
                         }
                       }
-                      // 修复：仅查询状态字段值，避免联合体错误
                       items(first: 100) {
                         nodes {
                           id
@@ -157,10 +155,10 @@ jobs:
                 return;
               }
 
-              // ========================= 5. WIP限制校验（修复查询逻辑） =========================
+              // ========================= 5. WIP限制校验（移除GraphQL内部注释） =========================
               let isWipExceeded = false;
               if (wipLimitField && targetStage.name !== '📋 已归档 (Archived)' && targetStage.name !== '🎯 核心整合 (Integration)') {
-                // 精准查询目标阶段的WIP限制值
+                // GraphQL字符串内无注释，避免解析错误
                 const wipQuery = `
                   query($projectId: ID!, $fieldId: ID!, $statusFieldId: ID!, $optionId: ID!) {
                     node(id: $projectId) {
@@ -205,8 +203,9 @@ jobs:
                 }
               }
 
-              // ========================= 6. 项目项查询与状态更新 =========================
+              // ========================= 6. 项目项查询与状态更新（移除GraphQL内部注释） =========================
               const contentId = `${contentType}:${context.repo.owner}/${context.repo.repo}#${contentNumber}`;
+              // GraphQL字符串内无注释
               const itemQuery = `
                 query($projectId: ID!, $contentId: ID!) {
                   node(id: $projectId) {
@@ -231,7 +230,7 @@ jobs:
               }
               console.log(`✅ 找到项目项：${projectItem.id}`);
 
-              // 执行状态更新
+              // 执行状态更新（GraphQL字符串内无注释）
               const updateMutation = `
                 mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $valueId: ID!) {
                   updateProjectV2SingleSelectField(
@@ -263,3 +262,5 @@ jobs:
               if (error.errors) console.error('📝 GraphQL错误详情：', JSON.stringify(error.errors, null, 2));
               throw error;
             }
+
+ 
