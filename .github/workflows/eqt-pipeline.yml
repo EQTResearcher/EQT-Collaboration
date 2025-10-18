@@ -17,20 +17,31 @@ jobs:
       if: github.event.action == 'opened' && github.event.issue.pull_request == null
       with:
         script: |
-          await github.rest.projects.createCard({
-            column_id: "${{ secrets.SEED_OPTION_ID }}",
-            content_type: "Issue",
-            content_id: context.issue.id
-          });
-          await github.rest.issues.update({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            labels: ['🌱-seed']
-          });
-          await github.rest.issues.update({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: `## 🎯 EQT研究流程\n\n**当前阶段**: 🌱 新芽\n**优先级**: [请选择]\n**领域**: [请选择]\n**AI需求**: \n**预测**: \n**专家**: \n\n---\n*由 EQT Pipeline 自动创建*`
-          });
+          try {
+            // 添加Issue到项目看板
+            await github.rest.projects.createCard({
+              column_id: "${{ secrets.SEED_OPTION_ID }}",
+              content_id: context.issue.id,
+              content_type: "Issue"
+            });
+            
+            // 更新Issue标签
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: ['🌱-seed']
+            });
+            
+            // 更新Issue内容
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `## 🎯 EQT研究流程\n\n**当前阶段**: 🌱 新芽\n**优先级**: [请选择]\n**领域**: [请选择]\n**AI需求**: \n**预测**: \n**专家**: \n\n---\n*由 EQT Pipeline 自动创建*`
+            });
+            
+            console.log('Issue自动化设置完成');
+          } catch (error) {
+            console.error('自动化过程出错:', error);
+          }
