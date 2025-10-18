@@ -18,7 +18,7 @@ jobs:
       with:
         script: |
           await github.rest.projects.createCard({
-            column_id: "${{ secrets.NEW_BUD_COLUMN_ID }}",
+            column_id: "${{ secrets.SEED_OPTION_ID }}",
             content_type: "Issue",
             content_id: context.issue.id
           });
