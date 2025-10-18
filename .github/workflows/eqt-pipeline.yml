@@ -1,47 +1,294 @@
-name: EQT Pipeline Automation
+name: EQT Pipeline Automation (V2)
 on:
   issues:
-    types: [opened, labeled, closed, reopened, assigned]
+    types: [opened, labeled, unlabeled, closed, reopened, assigned, edited]
   pull_request:
     types: [opened, synchronize, closed, review_requested]
   workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+  contents: read
 
 jobs:
   automate-status:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: 自动设置新Issue到🌱新芽
-      uses: actions/github-script@v7
-      if: github.event.action == 'opened' && github.event.issue.pull_request == null
-      with:
-        script: |
-          try {
-            // 添加Issue到项目看板
-            await github.rest.projects.createCard({
-              column_id: "${{ secrets.SEED_OPTION_ID }}",
-              content_id: context.issue.id,
-              content_type: "Issue"
+      - uses: actions/checkout@v4
+
+      - name: 🌱 新 Issue 自动添加到项目并设为新芽
+        if: github.event_name == 'issues' && github.event.action == 'opened'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { graphql } = await import('@actions/github/lib/utils');
+            const { getOctokit } = await import('@actions/github');
+            const octokit = getOctokit(process.env.GITHUB_TOKEN);
+
+            // 添加项目项
+            const addMutation = `
+              mutation($projectId: ID!, $contentId: ID!) {
+                addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) {
+                  item { id }
+                }
+              }
+            `;
+            const addResult = await octokit.graphql(addMutation, {
+              projectId: "${{ secrets.EQT_PROJECT_NODE_ID }}",
+              contentId: context.payload.issue.node_id
             });
-            
-            // 更新Issue标签
+            const itemId = addResult.addProjectV2ItemById.item.id;
+
+            // 更新 Status 为 🌱 新芽
+            const updateMutation = `
+              mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $projectId, itemId: $itemId, fieldId: $fieldId, value: {singleSelectOptionId: $optionId}
+                }) {
+                  projectV2Item { id }
+                }
+              }
+            `;
+            await octokit.graphql(updateMutation, {
+              projectId: "${{ secrets.EQT_PROJECT_NODE_ID }}",
+              itemId: itemId,
+              fieldId: "${{ secrets.STATUS_FIELD_ID }}",
+              optionId: "${{ secrets.SEED_OPTION_ID }}"
+            });
+
+            // 添加标签和更新 Issue body
             await github.rest.issues.addLabels({
+              issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
               labels: ['🌱-seed']
             });
-            
-            // 更新Issue内容
+            const template = `## 🎯 EQT研究流程\n\n**当前阶段**: 🌱 新芽\n**优先级**: [请选择]\n**领域**: [请选择]\n**AI需求**: \n**预测**: \n**专家**: \n\n---\n*由 EQT Pipeline 自动创建*`;
+            const originalBody = context.payload.issue.body || '';
             await github.rest.issues.update({
+              issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: `## 🎯 EQT研究流程\n\n**当前阶段**: 🌱 新芽\n**优先级**: [请选择]\n**领域**: [请选择]\n**AI需求**: \n**预测**: \n**专家**: \n\n---\n*由 EQT Pipeline 自动创建*`
+              body: template + '\n\n' + originalBody
             });
-            
-            console.log('Issue自动化设置完成');
-          } catch (error) {
-            console.error('自动化过程出错:', error);
-          }
+
+      - name: 🔍 标签移动到论证中（更新 Status 字段）
+        if: github.event_name == 'issues' && (github.event.action == 'labeled' || github.event.action == 'edited') && (github.event.label?.name?.includes('🔍') || contains(github.event.issue.labels.*.name, '🔍'))
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { graphql } = await import('@actions/github/lib/utils');
+            const { getOctokit } = await import('@actions/github');
+            const octokit = getOctokit(process.env.GITHUB_TOKEN);
+
+            // 获取项目项 ID
+            const itemQuery = `
+              query($projectId: ID!, $contentId: ID!) {
+                node(id: $projectId) {
+                  ... on ProjectV2 {
+                    items(filterBy: {contentIds: [$contentId]}) {
+                      nodes { id }
+                    }
+                  }
+                }
+              }
+            `;
+            const itemResult = await octokit.graphql(itemQuery, {
+              projectId: "${{ secrets.EQT_PROJECT_NODE_ID }}",
+              contentId: context.issue.node_id
+            });
+            const itemId = itemResult.node.items.nodes[0]?.id;
+            if (!itemId) {
+              console.log('未找到项目项，跳过');
+              return;
+            }
+
+            // 更新 Status 为 🔍 论证中
+            const updateMutation = `
+              mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $projectId, itemId: $itemId, fieldId: $fieldId, value: {singleSelectOptionId: $optionId}
+                }) {
+                  projectV2Item { id }
+                }
+              }
+            `;
+            await octokit.graphql(updateMutation, {
+              projectId: "${{ secrets.EQT_PROJECT_NODE_ID }}",
+              itemId: itemId,
+              fieldId: "${{ secrets.STATUS_FIELD_ID }}",
+              optionId: "${{ secrets.EXPLORING_OPTION_ID }}"
+            });
+
+            await github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['🔍-exploring']
+            });
+
+      - name: 🧪 验证中 - 更新 Status
+        if: github.event_name == 'issues' && (github.event.action == 'labeled' || github.event.action == 'edited') && (contains(github.event.issue.body, 'EQT-Data') || github.event.label?.name?.includes('🧪'))
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // 类似上一步，获取 itemId 并更新为 VALIDATING_OPTION_ID
+            const { graphql } = await import('@actions/github/lib/utils');
+            const { getOctokit } = await import('@actions/github');
+            const octokit = getOctokit(process.env.GITHUB_TOKEN);
+
+            const itemQuery = `
+              query($projectId: ID!, $contentId: ID!) {
+                node(id: $projectId) {
+                  ... on ProjectV2 {
+                    items(filterBy: {contentIds: [$contentId]}) {
+                      nodes { id }
+                    }
+                  }
+                }
+              }
+            `;
+            const itemResult = await octokit.graphql(itemQuery, {
+              projectId: "${{ secrets.EQT_PROJECT_NODE_ID }}",
+              contentId: context.issue.node_id
+            });
+            const itemId = itemResult.node.items.nodes[0]?.id;
+            if (!itemId) return;
+
+            const updateMutation = `
+              mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $projectId, itemId: $itemId, fieldId: $fieldId, value: {singleSelectOptionId: $optionId}
+                }) {
+                  projectV2Item { id }
+                }
+              }
+            `;
+            await octokit.graphql(updateMutation, {
+              projectId: "${{ secrets.EQT_PROJECT_NODE_ID }}",
+              itemId: itemId,
+              fieldId: "${{ secrets.STATUS_FIELD_ID }}",
+              optionId: "${{ secrets.VALIDATING_OPTION_ID }}"
+            });
+
+            await github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['🧪-validating']
+            });
+
+      - name: 🤝 社区评审 - 更新 Status
+        if: github.event_name == 'issues' && (github.event.action == 'labeled' || github.event.action == 'edited') && github.event.label?.name?.includes('🤝')
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // 类似上一步，更新为 REVIEWING_OPTION_ID
+            // ... (复制上一步代码，替换 optionId: "${{ secrets.REVIEWING_OPTION_ID }}")
+            // 添加标签 ['🤝-reviewing']
+
+      - name: ✅ 初步共识 - 更新 Status
+        if: github.event_name == 'issues' && (github.event.action == 'labeled' || github.event.action == 'edited') && github.event.label?.name?.includes('✅')
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // 类似上一步，更新为 CONSENSUS_OPTION_ID
+            // ... (复制上一步代码，替换 optionId: "${{ secrets.CONSENSUS_OPTION_ID }}")
+            // 添加标签 ['✅-consensus']
+
+      - name: PR合并 → 🎯 核心整合
+        if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { graphql } = await import('@actions/github/lib/utils');
+            const { getOctokit } = await import('@actions/github');
+            const octokit = getOctokit(process.env.GITHUB_TOKEN);
+
+            // 提取关联 Issue
+            const issueMatch = context.payload.pull_request.title.match(/#(\d+)/) || context.payload.pull_request.body.match(/closes #(\d+)/i);
+            if (!issueMatch) {
+              console.log('未找到关联 Issue');
+              return;
+            }
+            const issueNumber = parseInt(issueMatch[1]);
+
+            // 获取 Issue node_id
+            const { data: issue } = await github.rest.issues.get({
+              issue_number: issueNumber,
+              owner: context.repo.owner,
+              repo: context.repo.repo
+            });
+            const contentId = issue.node_id;
+
+            // 获取项目项 ID
+            const itemQuery = `
+              query($projectId: ID!, $contentId: ID!) {
+                node(id: $projectId) {
+                  ... on ProjectV2 {
+                    items(filterBy: {contentIds: [$contentId]}) {
+                      nodes { id }
+                    }
+                  }
+                }
+              }
+            `;
+            const itemResult = await octokit.graphql(itemQuery, {
+              projectId: "${{ secrets.EQT_PROJECT_NODE_ID }}",
+              contentId: contentId
+            });
+            const itemId = itemResult.node.items.nodes[0]?.id;
+            if (!itemId) return;
+
+            // 更新 Status 为 🎯 核心整合
+            const updateMutation = `
+              mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $projectId, itemId: $itemId, fieldId: $fieldId, value: {singleSelectOptionId: $optionId}
+                }) {
+                  projectV2Item { id }
+                }
+              }
+            `;
+            await octokit.graphql(updateMutation, {
+              projectId: "${{ secrets.EQT_PROJECT_NODE_ID }}",
+              itemId: itemId,
+              fieldId: "${{ secrets.STATUS_FIELD_ID }}",
+              optionId: "${{ secrets.INTEGRATION_OPTION_ID }}"
+            });
+
+            // 关闭 Issue 并添加标签
+            await github.rest.issues.update({
+              issue_number: issueNumber,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'closed',
+              labels: ['🎯-integrated']
+            });
+
+  ai-bot-integration:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'issues' && (github.event.action == 'opened' || github.event.action == 'edited') && contains(github.event.issue.body, '@EQT-AI-Bot')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 检测AI需求并通知Bot
+        uses: actions/github-script@v7
+        env:
+          AI_BOT_WEBHOOK: ${{ secrets.AI_BOT_WEBHOOK }}
+        with:
+          script: |
+            const aiDemand = context.payload.issue.body.match(/@EQT-AI-Bot\s*(.+)/)?.[1];
+            if (aiDemand) {
+              const response = await fetch(process.env.AI_BOT_WEBHOOK, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  issue: context.issue,
+                  command: aiDemand,
+                  action: 'analyze'
+                })
+              });
+              console.log('AI Bot 响应:', response.status);
+            }
