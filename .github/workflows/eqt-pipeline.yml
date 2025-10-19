@@ -1,4 +1,4 @@
-name: EQT Pipeline Automation (V4)
+name: EQT Pipeline Automation (V5)
 
 on:
   issues:
@@ -53,27 +53,32 @@ jobs:
                 contentId: context.payload.issue.node_id
               });
               const itemId = addResult.addProjectV2ItemById.item.id;
-              core.info(`Added issue to project, itemId=${itemId}`);
+              core.info(\`Added issue to project, itemId=\${itemId}\`);
 
               // 2️⃣ Update Project field to "Seed"
+              // 👇 注意这里：GraphQL 要求 ID 类型，不能有引号
               const updateMutation = `
                 mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: ID!) {
                   updateProjectV2ItemFieldValue(input: {
                     projectId: $projectId,
                     itemId: $itemId,
                     fieldId: $fieldId,
-                    value: {singleSelectOptionId: $optionId}
+                    value: { singleSelectOptionId: $optionId }
                   }) {
                     projectV2Item { id }
                   }
                 }
               `;
-              await github.graphql(updateMutation, {
+
+              // ✅ 用 variables 形式传递，确保类型是 ID
+              const variables = {
                 projectId,
                 itemId,
                 fieldId,
                 optionId
-              });
+              };
+
+              await github.graphql(updateMutation, variables);
               core.info("Updated project field status to Seed");
 
               // 3️⃣ Add label
@@ -89,7 +94,7 @@ jobs:
               const template = [
                 "## 🎯 EQT研究流程",
                 "",
-                "**当前阶段**: 新芽",
+                "**当前阶段**: 🌱 新芽",
                 "**优先级**: [请选择]",
                 "**领域**: [请选择]",
                 "**AI需求**:",
