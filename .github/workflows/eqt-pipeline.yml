@@ -26,11 +26,17 @@ jobs:
         with:
           github-token: ${{ secrets.GH_PROJECT_PAT }}
           script: |
-            const projectId = process.env.EQT_PROJECT_NODE_ID;
-            const fieldId = process.env.STATUS_FIELD_ID;
-            const optionId = process.env.SEED_OPTION_ID;
+            const clean = (v) => v ? v.trim().replace(/^"|"$/g, '') : v;
+
+            const projectId = clean(process.env.EQT_PROJECT_NODE_ID);
+            const fieldId = clean(process.env.STATUS_FIELD_ID);
+            const optionId = clean(process.env.SEED_OPTION_ID);
 
             try {
+              core.info(`🔍 Using projectId=${projectId}`);
+              core.info(`🔍 Using fieldId=${fieldId}`);
+              core.info(`🔍 Using optionId=${optionId}`);
+
               // 1️⃣ 把 Issue 添加到 ProjectV2
               const addMutation = `
                 mutation($projectId: ID!, $contentId: ID!) {
@@ -47,7 +53,7 @@ jobs:
                 contentId: context.payload.issue.node_id
               });
               const itemId = addResult.addProjectV2ItemById.item.id;
-              core.info(`✅ Added issue to project: ${itemId}`);
+              core.info(\`✅ Added issue to project itemId=\${itemId}\`);
 
               // 2️⃣ 更新状态字段为“🌱 新芽”
               const updateMutation = `
@@ -62,7 +68,12 @@ jobs:
                   }
                 }
               `;
-              await github.graphql(updateMutation, { projectId, itemId, fieldId, optionId });
+              await github.graphql(updateMutation, {
+                projectId,
+                itemId,
+                fieldId,
+                optionId
+              });
               core.info("✅ Updated project field status to 🌱 新芽");
 
               // 3️⃣ 添加标签
@@ -104,4 +115,3 @@ jobs:
                 core.error(JSON.stringify(error.errors, null, 2));
               }
             }
-
