@@ -1,4 +1,4 @@
-name: EQT Pipeline Automation (V2)
+name: EQT Pipeline Automation (V3)
 
 on:
   issues:
@@ -85,7 +85,7 @@ jobs:
               });
               core.info("✅ Added label 🌱-seed");
 
-              // 4️⃣ 更新 Issue 模板
+              // 4️⃣ 更新 Issue 模板（⚡️此处关键修复）
               const template = [
                 "## 🎯 EQT研究流程",
                 "",
@@ -98,14 +98,14 @@ jobs:
                 "",
                 "---",
                 "*由 EQT Pipeline 自动创建*"
-              ].join("\\n");
+              ].join("\n");
 
               const originalBody = context.payload.issue.body || "";
               await github.rest.issues.update({
                 issue_number: context.issue.number,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                body: template + "\\n\\n" + originalBody
+                body: template + "\n\n" + originalBody
               });
               core.info("✅ Updated issue body successfully");
 
@@ -115,3 +115,4 @@ jobs:
                 core.error(JSON.stringify(error.errors, null, 2));
               }
             }
+
