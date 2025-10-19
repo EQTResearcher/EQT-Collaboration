@@ -6,8 +6,8 @@ on:
 
 permissions:
   issues: write
-  repository-projects: write
   contents: read
+  repository-projects: write
 
 jobs:
   automate-status:
@@ -18,11 +18,16 @@ jobs:
       - name: 🌱 新 Issue 自动添加到项目并设为新芽
         if: github.event_name == 'issues' && github.event.action == 'opened'
         uses: actions/github-script@v7
+        env:
+          EQT_PROJECT_NODE_ID: ${{ secrets.EQT_PROJECT_NODE_ID }}
+          STATUS_FIELD_ID: ${{ secrets.STATUS_FIELD_ID }}
+          SEED_OPTION_ID: ${{ secrets.SEED_OPTION_ID }}
         with:
           script: |
-            const { graphql } = await import('@actions/github/lib/utils');
+            const projectId = process.env.EQT_PROJECT_NODE_ID;
+            const fieldId = process.env.STATUS_FIELD_ID;
+            const optionId = process.env.SEED_OPTION_ID;
 
-            // 使用 github 提供的 octokit，避免重复声明
             // 添加项目项
             const addMutation = `
               mutation($projectId: ID!, $contentId: ID!) {
@@ -32,27 +37,25 @@ jobs:
               }
             `;
             const addResult = await github.graphql(addMutation, {
-              projectId: "${{ secrets.EQT_PROJECT_NODE_ID }}",
+              projectId,
               contentId: context.payload.issue.node_id
             });
             const itemId = addResult.addProjectV2ItemById.item.id;
 
             // 更新 Status 为 🌱 新芽
             const updateMutation = `
-              mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+              mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: ID!) {
                 updateProjectV2ItemFieldValue(input: {
-                  projectId: $projectId, itemId: $itemId, fieldId: $fieldId, value: {singleSelectOptionId: $optionId}
+                  projectId: $projectId,
+                  itemId: $itemId,
+                  fieldId: $fieldId,
+                  value: {singleSelectOptionId: $optionId}
                 }) {
                   projectV2Item { id }
                 }
               }
             `;
-            await github.graphql(updateMutation, {
-              projectId: "${{ secrets.EQT_PROJECT_NODE_ID }}",
-              itemId: itemId,
-              fieldId: "${{ secrets.STATUS_FIELD_ID }}",
-              optionId: "${{ secrets.SEED_OPTION_ID }}"
-            });
+            await github.graphql(updateMutation, { projectId, itemId, fieldId, optionId });
 
             // 添加标签和更新 Issue body
             await github.rest.issues.addLabels({
@@ -61,6 +64,7 @@ jobs:
               repo: context.repo.repo,
               labels: ['🌱-seed']
             });
+
             const template = `## 🎯 EQT研究流程\n\n**当前阶段**: 🌱 新芽\n**优先级**: [请选择]\n**领域**: [请选择]\n**AI需求**: \n**预测**: \n**专家**: \n\n---\n*由 EQT Pipeline 自动创建*`;
             const originalBody = context.payload.issue.body || '';
             await github.rest.issues.update({
