@@ -1,4 +1,4 @@
-name: EQT Pipeline Automation (V5)
+name: EQT Pipeline Automation (Final)
 
 on:
   issues:
@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: "New Issue -> Add to Project and Set Stage"
+      - name: "🌱 新 Issue 自动添加到项目并设为新芽"
         if: github.event_name == 'issues' && github.event.action == 'opened'
         uses: actions/github-script@v7
         env:
@@ -26,71 +26,57 @@ jobs:
         with:
           github-token: ${{ secrets.GH_PROJECT_PAT }}
           script: |
-            const clean = (v) => v ? v.trim().replace(/^"|"$/g, '') : v;
-
-            const projectId = clean(process.env.EQT_PROJECT_NODE_ID);
-            const fieldId = clean(process.env.STATUS_FIELD_ID);
-            const optionId = clean(process.env.SEED_OPTION_ID);
-
             try {
-              core.info(`Using projectId=${projectId}`);
-              core.info(`Using fieldId=${fieldId}`);
-              core.info(`Using optionId=${optionId}`);
+              const projectId = process.env.EQT_PROJECT_NODE_ID.trim();
+              const fieldId = process.env.STATUS_FIELD_ID.trim();
+              const optionId = process.env.SEED_OPTION_ID.trim();
+              const issueNodeId = context.payload.issue.node_id;
 
-              // 1️⃣ Add Issue to ProjectV2
+              core.info(`✅ projectId=${projectId}`);
+              core.info(`✅ fieldId=${fieldId}`);
+              core.info(`✅ optionId=${optionId}`);
+
+              // 1️⃣ 把 Issue 添加到 Project
               const addMutation = `
-                mutation($projectId: ID!, $contentId: ID!) {
-                  addProjectV2ItemById(input: {
-                    projectId: $projectId,
-                    contentId: $contentId
-                  }) {
-                    item { id }
-                  }
+              mutation {
+                addProjectV2ItemById(input: {
+                  projectId: "${projectId}",
+                  contentId: "${issueNodeId}"
+                }) {
+                  item { id }
                 }
-              `;
-              const addResult = await github.graphql(addMutation, {
-                projectId,
-                contentId: context.payload.issue.node_id
-              });
+              }`;
+
+              const addResult = await github.graphql(addMutation);
               const itemId = addResult.addProjectV2ItemById.item.id;
-              core.info(\`Added issue to project, itemId=\${itemId}\`);
+              core.info(\`✅ 已添加到项目 itemId=\${itemId}\`);
 
-              // 2️⃣ Update Project field to "Seed"
-              // 👇 注意这里：GraphQL 要求 ID 类型，不能有引号
+              // 2️⃣ 更新状态字段为“🌱 新芽”
               const updateMutation = `
-                mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: ID!) {
-                  updateProjectV2ItemFieldValue(input: {
-                    projectId: $projectId,
-                    itemId: $itemId,
-                    fieldId: $fieldId,
-                    value: { singleSelectOptionId: $optionId }
-                  }) {
-                    projectV2Item { id }
-                  }
+              mutation {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: "${projectId}",
+                  itemId: "${itemId}",
+                  fieldId: "${fieldId}",
+                  value: { singleSelectOptionId: "${optionId}" }
+                }) {
+                  projectV2Item { id }
                 }
-              `;
+              }`;
 
-              // ✅ 用 variables 形式传递，确保类型是 ID
-              const variables = {
-                projectId,
-                itemId,
-                fieldId,
-                optionId
-              };
+              await github.graphql(updateMutation);
+              core.info("✅ 已更新状态字段为 🌱 新芽");
 
-              await github.graphql(updateMutation, variables);
-              core.info("Updated project field status to Seed");
-
-              // 3️⃣ Add label
+              // 3️⃣ 添加标签
               await github.rest.issues.addLabels({
                 issue_number: context.issue.number,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                labels: ["seed"]
+                labels: ["🌱-seed"]
               });
-              core.info("Added label: seed");
+              core.info("✅ 已添加标签 🌱-seed");
 
-              // 4️⃣ Update Issue template
+              // 4️⃣ 更新 Issue 模板正文
               const template = [
                 "## 🎯 EQT研究流程",
                 "",
@@ -110,12 +96,12 @@ jobs:
                 issue_number: context.issue.number,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                body: template + "\n\n" + originalBody
+                body: `${template}\n\n${originalBody}`
               });
-              core.info("Updated issue body successfully");
+              core.info("✅ Issue 模板已更新");
 
             } catch (error) {
-              core.setFailed(`出错啦: ${error.message}`);
+              core.setFailed(`❌ 出错啦: ${error.message}`);
               if (error.errors) {
                 core.error(JSON.stringify(error.errors, null, 2));
               }
