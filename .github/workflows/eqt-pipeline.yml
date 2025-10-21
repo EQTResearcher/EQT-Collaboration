@@ -64,6 +64,15 @@ jobs:
                   projectV2Item { id }
                 }
               }`;
+              
+              // 3️⃣ 添加标签
+              await github.rest.issues.addLabels({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: ["🌱-seed"]
+              });
+              core.info("✅ 已添加标签 🌱-seed");
 
               await github.graphql(updateMutation);
               core.info("✅ 已更新状态字段为 🌱 新芽");
