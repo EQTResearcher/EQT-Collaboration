@@ -46,3 +46,11 @@ jobs:
                   item { id }
                 }
               }`;
+
+            } catch (error) {
+              core.setFailed(`❌ 出错啦: ${error.message}`);
+              if (error.errors) {
+                core.error(JSON.stringify(error.errors, null, 2));
+              }
+            }
+
