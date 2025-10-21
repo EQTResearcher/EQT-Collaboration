@@ -49,6 +49,24 @@ jobs:
 
               // 发出 GraphQL 请求
               const addResult = await github.graphql(addMutation);
+              const itemId = addResult.addProjectV2ItemById.item.id;
+              core.info(\`✅ 已添加到项目 itemId=\${itemId}\`);
+
+              // 2️⃣ 更新状态字段为“🌱 新芽”
+              const updateMutation = `
+              mutation {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: "${projectId}",
+                  itemId: "${itemId}",
+                  fieldId: "${fieldId}",
+                  value: { singleSelectOptionId: "${optionId}" }
+                }) {
+                  projectV2Item { id }
+                }
+              }`;
+
+              await github.graphql(updateMutation);
+              core.info("✅ 已更新状态字段为 🌱 新芽");
 
               // 打印请求结果
               core.info(`✅ Add Result: ${JSON.stringify(addResult)}`);
