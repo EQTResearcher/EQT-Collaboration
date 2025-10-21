@@ -47,10 +47,17 @@ jobs:
                 }
               }`;
 
+              // 发出 GraphQL 请求
+              const addResult = await github.graphql(addMutation);
+
+              // 打印请求结果
+              core.info(`✅ Add Result: ${JSON.stringify(addResult)}`);
+
             } catch (error) {
               core.setFailed(`❌ 出错啦: ${error.message}`);
               if (error.errors) {
                 core.error(JSON.stringify(error.errors, null, 2));
               }
             }
+
 
