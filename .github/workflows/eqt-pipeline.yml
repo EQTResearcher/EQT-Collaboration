@@ -77,6 +77,30 @@ jobs:
               await github.graphql(updateMutation);
               core.info("✅ 已更新状态字段为 🌱 新芽");
 
+              // 4️⃣ 更新 Issue 模板正文
+              const template = [
+                "## 🎯 EQT研究流程",
+                "",
+                "**当前阶段**: 🌱 新芽",
+                "**优先级**: [请选择]",
+                "**领域**: [请选择]",
+                "**AI需求**:",
+                "**预测**:",
+                "**专家**:",
+                "",
+                "---",
+                "*由 EQT Pipeline 自动创建*"
+              ].join("\n");
+
+              const originalBody = context.payload.issue.body || "";
+              await github.rest.issues.update({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `${template}\n\n${originalBody}`
+              });
+              core.info("✅ Issue 模板已更新");
+              
               // 打印请求结果
               core.info(`✅ Add Result: ${JSON.stringify(addResult)}`);
 
