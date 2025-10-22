@@ -28,8 +28,79 @@ on:
   project_card:
     types: [created, moved, deleted]
 
+permissions:
+  contents: read
+  issues: write
 
 jobs:
+  # -------------------------------
+  # 🧭 阶段 1：查询项目信息
+  # -------------------------------
+  query-project-info:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "🔍 查询 EQT 项目信息 (字段与选项)"
+        uses: actions/github-script@v7
+        env:
+          GH_PAT: ${{ secrets.GH_PROJECT_PAT }}
+          EQT_PROJECT_NODE_ID: ${{ secrets.EQT_PROJECT_NODE_ID }}
+        with:
+          github-token: ${{ secrets.GH_PROJECT_PAT }}
+          script: |
+            try {
+              const projectId = process.env.EQT_PROJECT_NODE_ID.trim();
+              const query = `
+              query {
+                node(id: "${projectId}") {
+                  ... on ProjectV2 {
+                    id
+                    title
+                    fields(first: 50) {
+                      nodes {
+                        id
+                        name
+                        dataType
+                        ... on ProjectV2SingleSelectField {
+                          options {
+                            id
+                            name
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }`;
+              
+              const result = await github.graphql(query);
+              const project = result.node;
+              core.info(`📘 项目标题: ${project.title}`);
+
+              project.fields.nodes.forEach(f => {
+                core.info(`\n🧩 字段名称: ${f.name}`);
+                core.info(`   ➤ 字段ID: ${f.id}`);
+                if (f.options) {
+                  f.options.forEach(o => {
+                    core.info(`      - ${o.name}: ${o.id}`);
+                  });
+                }
+              });
+
+              core.info("✅ 查询成功！你现在可以在日志中找到 STATUS_FIELD_ID 与 🌱 新芽 的 Option ID。");
+
+            } catch (error) {
+              core.setFailed(`❌ 查询失败: ${error.message}`);
+              if (error.errors) {
+                core.error(JSON.stringify(error.errors, null, 2));
+              }
+            }
+
+  # -------------------------------
+  # 🌱 阶段 2：新 Issue 自动加入项目 & 初始化
+  # -------------------------------
   automate-status:
     runs-on: ubuntu-latest
     steps:
@@ -67,7 +138,6 @@ jobs:
                 }
               }`;
 
-              // 发出 GraphQL 请求
               const addResult = await github.graphql(addMutation);
               const itemId = addResult.addProjectV2ItemById.item.id;
               core.info(`✅ 已添加到项目 itemId=${itemId}`);
@@ -84,7 +154,7 @@ jobs:
                   projectV2Item { id }
                 }
               }`;
-              
+
               // 3️⃣ 添加标签
               await github.rest.issues.addLabels({
                 issue_number: context.issue.number,
@@ -120,8 +190,8 @@ jobs:
                 body: `${template}\n\n${originalBody}`
               });
               core.info("✅ Issue 模板已更新");
-              
-              // 打印请求结果
+
+              // 打印结果
               core.info(`✅ Add Result: ${JSON.stringify(addResult)}`);
 
             } catch (error) {
