@@ -1,4 +1,4 @@
-name: EQT Kanban Advanced Automation (Final Runnable Version)
+name: EQT Kanban Advanced Automation (Enhanced with Project Query)
 
 on:
   workflow_dispatch:
@@ -9,8 +9,8 @@ on:
         default: 'Issue'
         type: choice
         options:
-        - Issue
-        - PullRequest
+          - Issue
+          - PullRequest
       contentNumber:
         description: 'Issue 或 PR 编号'
         required: true
@@ -33,9 +33,9 @@ permissions:
   issues: write
 
 jobs:
-  # -------------------------------
-  # 🧭 阶段 1：查询项目信息
-  # -------------------------------
+  # ==============================================================
+  # 🧭 阶段 1：查询项目信息（字段 + 选项）
+  # ==============================================================
   query-project-info:
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'
@@ -52,6 +52,9 @@ jobs:
           script: |
             try {
               const projectId = process.env.EQT_PROJECT_NODE_ID.trim();
+              core.info(`🚀 正在查询项目字段信息: ${projectId}`);
+
+              // ✅ 修正版查询：Union类型必须展开
               const query = `
               query {
                 node(id: "${projectId}") {
@@ -60,6 +63,7 @@ jobs:
                     title
                     fields(first: 50) {
                       nodes {
+                        __typename
                         id
                         name
                         dataType
@@ -69,27 +73,47 @@ jobs:
                             name
                           }
                         }
+                        ... on ProjectV2IterationField {
+                          configuration {
+                            duration
+                            startDay
+                          }
+                        }
+                        ... on ProjectV2Field {
+                          id
+                          name
+                          dataType
+                        }
                       }
                     }
                   }
                 }
               }`;
-              
+
               const result = await github.graphql(query);
               const project = result.node;
+
+              if (!project) {
+                core.setFailed("❌ 未找到项目，请检查 EQT_PROJECT_NODE_ID 是否正确。");
+                return;
+              }
+
               core.info(`📘 项目标题: ${project.title}`);
+              core.info(`📦 Project ID: ${project.id}`);
+              core.info("🧩 字段详情如下：");
 
-              project.fields.nodes.forEach(f => {
-                core.info(`\n🧩 字段名称: ${f.name}`);
-                core.info(`   ➤ 字段ID: ${f.id}`);
-                if (f.options) {
-                  f.options.forEach(o => {
-                    core.info(`      - ${o.name}: ${o.id}`);
-                  });
+              for (const field of project.fields.nodes) {
+                core.info(`\n🔹 字段名称: ${field.name}`);
+                core.info(`   ├─ 类型: ${field.__typename}`);
+                core.info(`   ├─ 字段ID: ${field.id}`);
+                if (field.options) {
+                  for (const opt of field.options) {
+                    core.info(`   │   └─ 选项: ${opt.name} (${opt.id})`);
+                  }
                 }
-              });
+              }
 
-              core.info("✅ 查询成功！你现在可以在日志中找到 STATUS_FIELD_ID 与 🌱 新芽 的 Option ID。");
+              core.info("✅ 查询成功！你现在可以在日志中查找 STATUS_FIELD_ID 与 🌱 新芽 Option ID。");
 
             } catch (error) {
               core.setFailed(`❌ 查询失败: ${error.message}`);
@@ -98,9 +122,9 @@ jobs:
               }
             }
 
-  # -------------------------------
-  # 🌱 阶段 2：新 Issue 自动加入项目 & 初始化
-  # -------------------------------
+  # ==============================================================
+  # 🌱 阶段 2：新 Issue 自动加入项目 & 初始化状态
+  # ==============================================================
   automate-status:
     runs-on: ubuntu-latest
     steps:
