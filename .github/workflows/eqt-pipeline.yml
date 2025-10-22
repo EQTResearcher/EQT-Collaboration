@@ -42,11 +42,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: "🔍 查询 EQT 项目信息 (字段与选项)"
+      - name: "🔍 查询 EQT 项目字段信息"
         uses: actions/github-script@v7
         env:
-          GH_PAT: ${{ secrets.GH_PROJECT_PAT }}
-          EQT_PROJECT_NODE_ID: ${{ secrets.EQT_PROJECT_NODE_ID }}
+          GH_PAT: ${{ secrets.GH_PROJECT_PAT }}           # 个人访问令牌（需要 project:read 权限）
+          EQT_PROJECT_NODE_ID: ${{ secrets.EQT_PROJECT_NODE_ID }} # 项目ID（node ID）
         with:
           github-token: ${{ secrets.GH_PROJECT_PAT }}
           script: |
@@ -54,7 +54,7 @@ jobs:
               const projectId = process.env.EQT_PROJECT_NODE_ID.trim();
               core.info(`🚀 正在查询项目字段信息: ${projectId}`);
 
-              // ✅ 修正版查询：Union类型必须展开
+              // ✅ 修正版 GraphQL 查询：正确处理 Union 类型
               const query = `
               query {
                 node(id: "${projectId}") {
@@ -64,25 +64,37 @@ jobs:
                     fields(first: 50) {
                       nodes {
                         __typename
-                        id
-                        name
-                        dataType
+                        ... on ProjectV2FieldCommon {
+                          id
+                          name
+                        }
                         ... on ProjectV2SingleSelectField {
+                          id
+                          name
                           options {
                             id
                             name
                           }
                         }
                         ... on ProjectV2IterationField {
+                          id
+                          name
                           configuration {
                             duration
                             startDay
                           }
                         }
-                        ... on ProjectV2Field {
+                        ... on ProjectV2NumberField {
                           id
                           name
-                          dataType
+                        }
+                        ... on ProjectV2TextField {
+                          id
+                          name
+                        }
+                        ... on ProjectV2DateField {
+                          id
+                          name
                         }
                       }
                     }
