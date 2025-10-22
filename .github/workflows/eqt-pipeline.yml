@@ -1,13 +1,33 @@
-name: EQT Pipeline Automation (Final)
+name: EQT Kanban Advanced Automation (Final Runnable Version)
 
 on:
-  issues:
-    types: [opened]
   workflow_dispatch:
+    inputs:
+      contentType:
+        description: 'Content Type (Issue 或 PullRequest)'
+        required: true
+        default: 'Issue'
+        type: choice
+        options:
+        - Issue
+        - PullRequest
+      contentNumber:
+        description: 'Issue 或 PR 编号'
+        required: true
+        type: number
+        default: "000001"
+      triggerAI:
+        description: '同时触发 AI Bot 分析'
+        required: false
+        type: boolean
+        default: false
+  issues:
+    types: [opened, labeled, unlabeled, closed, reopened, edited]
+  pull_request:
+    types: [opened, closed, reopened, ready_for_review, edited, labeled, unlabeled]
+  project_card:
+    types: [created, moved, deleted]
 
-permissions:
-  contents: read
-  issues: write
 
 jobs:
   automate-status:
